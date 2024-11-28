@@ -1,13 +1,32 @@
+const WebSocket = require('ws');
 const http = require('http');
 
-// Create a simple HTTP server
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('Node.js server is working!');
+    res.end('WebSocket signaling server is running.\n');
 });
 
-// Start the server
-const PORT = 3000;
+const wss = new WebSocket.Server({ server });
+
+wss.on('connection', (ws) => {
+    console.log('A client connected.');
+
+    ws.on('message', (message) => {
+        console.log('Received:', message);
+
+        wss.clients.forEach((client) => {
+            if (client !== ws && client.readyState === WebSocket.OPEN) {
+                client.send(message);
+            }
+        });
+    });
+
+    ws.on('close', () => {
+        console.log('A client disconnected.');
+    });
+});
+
+const PORT = 8080;
 server.listen(PORT, () => {
-    console.log(`Server is running at http://localhost:${PORT}`);
+    console.log(`WebSocket signaling server is running on ws://localhost:${PORT}`);
 });
