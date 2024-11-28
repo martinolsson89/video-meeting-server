@@ -1,11 +1,12 @@
-import React from 'react';
-import ScreenShareTest from './pages/ScreenShareTest';
+import { BrowserRouter} from 'react-router-dom';
+import {AppRouter} from './router/approuter';
+import './App.css';
 
 function App() {
   return (
-    <div className="App">
-      <ScreenShareTest />
-    </div>
+    <BrowserRouter>
+      <AppRouter/>   
+    </BrowserRouter>
   );
 }
 
