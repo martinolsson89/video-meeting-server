@@ -3,6 +3,7 @@ import {Routes, Route } from "react-router-dom";
 import Navbar from './components/navbar'
 import Home from './pages/home';
 import Room from './pages/room';
+import ScreenShareTest from './pages/ScreenShareTest';
 import Container from 'react-bootstrap/Container';
 import './App.css';
 
@@ -14,6 +15,7 @@ function App() {
         <Routes>
             <Route path='/' element={<Home/>}></Route>
             <Route path='/room' element={<Room/>}></Route>
+            <Route path='/ScreenShareTest' element={<ScreenShareTest />}></Route>
         </Routes>
       </Container>
     </BrowserRouter>

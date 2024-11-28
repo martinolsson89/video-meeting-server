@@ -13,6 +13,7 @@ function NavMenu() {
           <Nav className="me-auto">
             <NavDropdown title="Rooms" id="nav-dropdown">
               <NavDropdown.Item href="/room">Room1</NavDropdown.Item>
+              <NavDropdown.Item href="/ScreenShareTest">ScreenShareTest</NavDropdown.Item>
             </NavDropdown>
           </Nav>
         </Navbar.Collapse>
