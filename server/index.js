@@ -1,32 +1,51 @@
-const WebSocket = require('ws');
+const express = require('express');
+const cors = require('cors');
+const { Server } = require('socket.io');
 const http = require('http');
 
-const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end('WebSocket signaling server is running.\n');
+const app = express();
+app.use(cors());
+
+const port = process.env.PORT || 8080;
+const server = http.createServer(app);
+
+const io = new Server(server, {
+    cors: {
+        origin: '*', // Allow all origins
+        methods: ['GET', 'POST'],
+    },
 });
 
-const wss = new WebSocket.Server({ server });
+app.get('/', (req, res) => {
+    res.send(`WebRTC Signaling Server is running on port ${port}`);
+});
 
-wss.on('connection', (ws) => {
-    console.log('A client connected.');
+io.on('connection', (socket) => {
+    console.log('A user connected:', socket.id);
 
-    ws.on('message', (message) => {
-        console.log('Received:', message);
-
-        wss.clients.forEach((client) => {
-            if (client !== ws && client.readyState === WebSocket.OPEN) {
-                client.send(message);
-            }
+    // Listen for SDP exchange (offers/answers)
+    socket.on('exchangeSDP', (data) => {
+        console.log('SDP exchange:', data);
+        socket.to(data.target).emit('exchangeSDP', {
+            sdp: data.sdp,
+            sender: socket.id,
         });
     });
 
-    ws.on('close', () => {
-        console.log('A client disconnected.');
+    // Listen for ICE candidates
+    socket.on('candidate', (data) => {
+        console.log('ICE candidate:', data);
+        socket.to(data.target).emit('candidate', {
+            candidate: data.candidate,
+            sender: socket.id,
+        });
+    });
+
+    socket.on('disconnect', () => {
+        console.log('User disconnected:', socket.id);
     });
 });
 
-const PORT = 8080;
-server.listen(PORT, () => {
-    console.log(`WebSocket signaling server is running on ws://localhost:${PORT}`);
+server.listen(port, () => {
+    console.log(`Signaling server running on http://localhost:${port}`);
 });
