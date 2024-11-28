@@ -1,8 +1,11 @@
-
+import Row from 'react-bootstrap/Row';
+import Col from 'react-bootstrap/Col';
 
 export default function Home()
 {
     return (
-        <div>Home Page</div>
+        <Row>
+            <Col>Home Page</Col>
+        </Row>
     )
 }
