@@ -6,9 +6,8 @@ const SIGNALING_SERVER_URL = 'http://localhost:8080'; // Ensure this matches you
 
 const ScreenShareTest = () => {
   const [peers, setPeers] = useState({});
-  const [existingPeers, setExistingPeers] = useState([]);
   const [isSharing, setIsSharing] = useState(false);
-  
+
   const localVideoRef = useRef(null);
   const remoteVideoRefs = useRef({});
   const socketRef = useRef(null);
@@ -22,24 +21,25 @@ const ScreenShareTest = () => {
     // When connected, log the connection
     socketRef.current.on('connect', () => {
       console.log('Connected to signaling server with ID:', socketRef.current.id);
+      socketRef.current.emit('join', {});
     });
 
     // Listen for 'existing-peers' event
     socketRef.current.on('existing-peers', (data) => {
       const { peers: existingPeersList } = data;
       console.log('Existing peers:', existingPeersList);
-      setExistingPeers(existingPeersList);
+
+      existingPeersList.forEach((peerId) => {
+        if (!peersRef.current[peerId]) {
+          initiatePeerConnection(peerId, true); // New peer initiates the connection
+        }
+      });
     });
 
     // Listen for 'new-peer' events
     socketRef.current.on('new-peer', (data) => {
       const { id } = data;
       console.log('New peer joined:', id);
-      if (isSharing) {
-        initiatePeerConnection(id, true);
-      } else {
-        console.log('Screen not shared yet. Will connect when screen is shared.');
-      }
     });
 
     // Listen for SDP exchange
@@ -50,15 +50,6 @@ const ScreenShareTest = () => {
         initiatePeerConnection(sender, false);
       }
       peersRef.current[sender].signal(sdp);
-    });
-
-    // Listen for ICE candidates
-    socketRef.current.on('candidate', (data) => {
-      const { candidate, sender } = data;
-      console.log('Received ICE candidate from:', sender);
-      if (peersRef.current[sender]) {
-        peersRef.current[sender].signal(candidate);
-      }
     });
 
     // Handle peer disconnection
@@ -87,17 +78,20 @@ const ScreenShareTest = () => {
       }
       Object.values(peersRef.current).forEach((peer) => peer.destroy());
     };
-  }, [isSharing]);
+  }, []);
 
   // Function to initiate a peer connection
   const initiatePeerConnection = (peerId, initiator = true) => {
     console.log(`Initiating connection with peer ${peerId} as ${initiator ? 'initiator' : 'receiver'}`);
     
-    const peer = new SimplePeer({
+    const peerOptions = {
       initiator,
       trickle: false,
-      stream: screenStreamRef.current,
-    });
+    };
+    if (isSharing && screenStreamRef.current) {
+      peerOptions.stream = screenStreamRef.current;
+    }
+    const peer = new SimplePeer(peerOptions);
 
     // Handle signaling data
     peer.on('signal', (data) => {
@@ -105,11 +99,6 @@ const ScreenShareTest = () => {
         socketRef.current.emit('exchangeSDP', {
           target: peerId,
           sdp: data,
-        });
-      } else if (data.candidate) {
-        socketRef.current.emit('candidate', {
-          target: peerId,
-          candidate: data,
         });
       }
     });
@@ -149,7 +138,6 @@ const ScreenShareTest = () => {
       console.error(`Error with peer ${peerId}:`, err);
     });
 
-    // Save the peer connection
     peersRef.current[peerId] = peer;
     setPeers((prevPeers) => ({
       ...prevPeers,
@@ -173,7 +161,6 @@ const ScreenShareTest = () => {
         localVideoRef.current.play();
       }
 
-      // Add the stream tracks to all existing peer connections
       Object.values(peersRef.current).forEach((peer) => {
         stream.getTracks().forEach((track) => {
           peer.addTrack(track, stream);
@@ -181,14 +168,6 @@ const ScreenShareTest = () => {
       });
 
       console.log('Screen stream obtained and added to all existing peers.');
-
-      // Initiate connections with existing peers
-      existingPeers.forEach((peerId) => {
-        if (!peersRef.current[peerId]) {
-          initiatePeerConnection(peerId, true);
-        }
-      });
-
     } catch (err) {
       console.error('Error accessing display media:', err);
     }
