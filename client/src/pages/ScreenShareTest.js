@@ -1,6 +1,10 @@
 import React, { useRef, useEffect, useState } from 'react';
 import io from 'socket.io-client';
 import SimplePeer from 'simple-peer';
+import process from 'process';
+
+// Assign the polyfill to the global window object
+window.process = process;
 
 const SIGNALING_SERVER_URL = 'http://localhost:8080'; // Ensure this matches your server's URL
 
