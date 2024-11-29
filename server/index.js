@@ -23,6 +23,13 @@ app.get('/', (req, res) => {
 io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
 
+// Notify all other clients about the new peer
+socket.broadcast.emit('new-peer', { id: socket.id });
+
+// Send the list of existing peers to the new client
+const connectedPeers = Array.from(io.sockets.sockets.keys()).filter(id => id !== socket.id);
+socket.emit('existing-peers', { peers: connectedPeers });
+
     // Listen for SDP exchange (offers/answers)
     socket.on('exchangeSDP', (data) => {
         console.log('SDP exchange:', data);
