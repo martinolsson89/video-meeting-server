@@ -75,21 +75,24 @@ io.on('connection', (socket) => {
 
         // Handle SDP exchange (offer/answer)
         socket.on('exchangeSDP', (data) => {
-            console.log('SDP exchange from', socket.id, 'to', data.target);
+            console.log(`[SDP Exchange] From: ${socket.id}, To: ${data.target}`);
             io.to(data.target).emit('exchangeSDP', {
-                sdp: data.sdp,
-                sender: socket.id,
+              sdp: data.sdp,
+              sender: socket.id,
             });
         });
+          
 
         // Handle ICE candidates
         socket.on('candidate', (data) => {
-            console.log('ICE candidate from', socket.id, 'to', data.target);
+            if (!data.candidate) return;
+            console.log(`[ICE Candidate] From: ${socket.id}, To: ${data.target}`);
             io.to(data.target).emit('candidate', {
-                candidate: data.candidate,
-                sender: socket.id,
+              candidate: data.candidate,
+              sender: socket.id,
             });
         });
+          
 
         // Handle chat message
         socket.on('chat-message', (message) => {
