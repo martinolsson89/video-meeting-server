@@ -28,10 +28,12 @@ io.on('connection', (socket) => {
         console.log('User disconnected:', socket.id);
 
         // Notify others in the room that the user has left
-        socket.to(roomId).emit('user-disconnected', {
-            id: socket.id,
-            userName: userName,
-        });
+        if (socket.roomId) {
+            socket.to(socket.roomId).emit('user-disconnected', {
+                id: socket.id,
+                userName: socket.userName,
+            });
+        }
     });
 
     // Listen for 'join-room' event to handle room joining
@@ -89,6 +91,7 @@ io.on('connection', (socket) => {
             });
         });
 
+        // Handle chat message
         socket.on('chat-message', (message) => {
             // Broadcast the message to other users in the room
             socket.to(roomId).emit('chat-message', {
@@ -96,7 +99,6 @@ io.on('connection', (socket) => {
                 userName: userName,
             });
         });
-
     });
 });
 
