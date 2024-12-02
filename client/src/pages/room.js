@@ -14,6 +14,7 @@ function Room() {
 
   const socketRef = useRef();
   const peersRef = useRef({});
+  const localStreamRef = useRef(null);
   const screenStreamRef = useRef(null);
   const localVideoRef = useRef(null);
   const remoteVideoRefs = useRef({});
@@ -24,64 +25,46 @@ function Room() {
       return;
     }
 
-    // Initialize socket connection
     socketRef.current = io(SIGNALING_SERVER_URL);
 
-    // Join the room
     socketRef.current.emit('join-room', { roomId, userName });
 
-    // Listen for existing peers and participants
     socketRef.current.on('existing-peers', ({ peers }) => {
       setParticipants(peers);
-      peers.forEach((peerId) => {
-        if (!peersRef.current[peerId]) {
-          initiatePeerConnection(peerId, true); // New peer initiates connection
-        }
-      });
+      peers.forEach((peer) => initiatePeerConnection(peer.id, true));
     });
 
-    // Listen for new users joining
     socketRef.current.on('user-connected', ({ id, userName }) => {
-      setParticipants((prevParticipants) => [
-        ...prevParticipants,
-        { id, userName },
-      ]);
-      if (!peersRef.current[id]) {
-        initiatePeerConnection(id, false); // New user connects
-      }
+      setParticipants((prev) => [...prev, { id, userName }]);
+      initiatePeerConnection(id, false);
     });
 
-    // Listen for users disconnecting
     socketRef.current.on('user-disconnected', ({ id }) => {
-      setParticipants((prevParticipants) =>
-        prevParticipants.filter((user) => user.id !== id)
-      );
       if (peersRef.current[id]) {
         peersRef.current[id].destroy();
         delete peersRef.current[id];
-        if (remoteVideoRefs.current[id]) {
-          remoteVideoRefs.current[id].srcObject = null;
-          delete remoteVideoRefs.current[id];
-        }
+      }
+      setParticipants((prev) => prev.filter((user) => user.id !== id));
+    });
+
+    socketRef.current.on('exchangeSDP', ({ sdp, sender }) => {
+      if (peersRef.current[sender]) {
+        peersRef.current[sender].signal(sdp);
       }
     });
 
-    // Cleanup on component unmount
     return () => {
       socketRef.current.disconnect();
       Object.values(peersRef.current).forEach((peer) => peer.destroy());
     };
-  }, [userName, roomId, navigate]);
+  }, [roomId, userName, navigate]);
 
-  // Function to initiate a peer connection
   const initiatePeerConnection = (peerId, initiator = true) => {
-    const peerOptions = {
+    const peer = new SimplePeer({
       initiator,
       trickle: false,
-      stream: screenStreamRef.current, // Send screen stream if sharing
-    };
-
-    const peer = new SimplePeer(peerOptions);
+      stream: localStreamRef.current,
+    });
 
     peer.on('signal', (data) => {
       socketRef.current.emit('exchangeSDP', {
@@ -92,55 +75,68 @@ function Room() {
 
     peer.on('stream', (remoteStream) => {
       if (!remoteVideoRefs.current[peerId]) {
-        remoteVideoRefs.current[peerId] = document.createElement('video');
-        remoteVideoRefs.current[peerId].style.width = '45%';
-        remoteVideoRefs.current[peerId].style.marginRight = '10%';
-        remoteVideoRefs.current[peerId].autoplay = true;
-        remoteVideoRefs.current[peerId].controls = true;
-        document.getElementById('remoteVideos').appendChild(remoteVideoRefs.current[peerId]);
+        const videoElement = document.createElement('video');
+        videoElement.style.width = '45%';
+        videoElement.style.margin = '10px';
+        videoElement.autoplay = true;
+        videoElement.controls = true;
+        videoElement.srcObject = remoteStream;
+        document.getElementById('remoteVideos').appendChild(videoElement);
+        remoteVideoRefs.current[peerId] = videoElement;
       }
-      remoteVideoRefs.current[peerId].srcObject = remoteStream;
     });
 
     peer.on('close', () => {
-      delete peersRef.current[peerId];
-      setParticipants((prev) => prev.filter((p) => p.id !== peerId));
       if (remoteVideoRefs.current[peerId]) {
-        remoteVideoRefs.current[peerId].srcObject = null;
+        remoteVideoRefs.current[peerId].remove();
+        delete remoteVideoRefs.current[peerId];
       }
-    });
-
-    peer.on('error', (err) => {
-      console.error(`Error with peer ${peerId}:`, err);
     });
 
     peersRef.current[peerId] = peer;
   };
 
-  // Function to share the screen
   const shareScreen = async () => {
     try {
-      const stream = await navigator.mediaDevices.getDisplayMedia({
+      const screenStream = await navigator.mediaDevices.getDisplayMedia({
         video: true,
         audio: true,
       });
-      screenStreamRef.current = stream;
+
+      screenStreamRef.current = screenStream;
       setIsSharing(true);
 
-      // Display the local screen
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = stream;
-        localVideoRef.current.play();
-      }
-
-      // Send the screen stream to all peers
       Object.values(peersRef.current).forEach((peer) => {
-        stream.getTracks().forEach((track) => {
-          peer.addTrack(track, stream);
+        screenStream.getTracks().forEach((track) => {
+          peer.addTrack(track, screenStream);
         });
       });
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = screenStream;
+      }
+
+      screenStream.oninactive = () => {
+        stopSharing();
+      };
     } catch (err) {
-      console.error('Error accessing display media:', err);
+      console.error('Error sharing screen:', err);
+    }
+  };
+
+  const stopSharing = () => {
+    if (screenStreamRef.current) {
+      screenStreamRef.current.getTracks().forEach((track) => track.stop());
+      screenStreamRef.current = null;
+      setIsSharing(false);
+
+      Object.values(peersRef.current).forEach((peer) => {
+        peer.removeTrack(peer.streams[0]);
+      });
+
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = localStreamRef.current;
+      }
     }
   };
 
@@ -156,12 +152,15 @@ function Room() {
       </div>
       <div className="screen-sharing flex-fill p-3">
         <h2>WebRTC Screen Sharing</h2>
-        <button onClick={shareScreen} style={{ marginBottom: '20px' }}>
-          Share Screen
+        <button
+          onClick={isSharing ? stopSharing : shareScreen}
+          style={{ marginBottom: '20px' }}
+        >
+          {isSharing ? 'Stop Sharing' : 'Share Screen'}
         </button>
         <div>
-          <h3>Local Screen</h3>
-          <video ref={localVideoRef} style={{ width: '45%', marginRight: '10%' }} muted />
+          <h3>Local Video</h3>
+          <video ref={localVideoRef} style={{ width: '45%' }} muted />
         </div>
         <div id="remoteVideos">
           <h3>Remote Screens</h3>
