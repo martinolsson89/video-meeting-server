@@ -1,24 +1,19 @@
-import { BrowserRouter} from 'react-router-dom';
-import {Routes, Route } from "react-router-dom";
-import Navbar from './components/navbar'
-import Home from './pages/home';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Room from './pages/room';
+import Lobby from './pages/lobby';
 import ScreenShareTest from './pages/ScreenShareTest';
-import Container from 'react-bootstrap/Container';
 import './App.css';
+import './styles.css';
 
 function App() {
   return (
-    <BrowserRouter>
-      <Navbar />
-      <Container fluid>
-        <Routes>
-            <Route path='/' element={<Home/>}></Route>
-            <Route path='/room' element={<Room/>}></Route>
-            <Route path='/ScreenShareTest' element={<ScreenShareTest />}></Route>
-        </Routes>
-      </Container>
-    </BrowserRouter>
+    <Router>
+      <Routes>
+        <Route path='/' element={<Lobby />} />
+        <Route path='/room/:roomId' element={<Room />}></Route>
+        <Route path='/ScreenShareTest' element={<ScreenShareTest />}></Route>
+      </Routes>
+    </Router>
   );
 }
 

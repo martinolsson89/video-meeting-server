@@ -1,0 +1,16 @@
+.room-container {
+    display: flex;
+    height: 100vh;
+  }
+  
+  .participants-list,
+  .chat-box {
+    width: 250px;
+    overflow-y: auto;
+  }
+  
+  .screen-sharing {
+    flex-grow: 1;
+    background-color: #f0f0f0;
+  }
+  

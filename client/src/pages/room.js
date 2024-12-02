@@ -1,60 +1,71 @@
-import React, { useState, useEffect, useRef } from 'react';
-import Row from 'react-bootstrap/Row';
-import Col from 'react-bootstrap/Col';
-import Button from 'react-bootstrap/Button';
+// components/Room.js
+import React, { useEffect, useState, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
+import io from 'socket.io-client';
 
-export default function Room() {
-  const [videos, setVideos] = useState([]); // State to track video streams
-  const localStreamRef = useRef(null); // Ref for local video stream
+function Room() {
+  const { roomId } = useParams();
+  const navigate = useNavigate();
+  const [userName] = useState(localStorage.getItem('userName'));
+  const [participants, setParticipants] = useState([]);
+  const socketRef = useRef();
 
-  // Initialize media stream
   useEffect(() => {
-    const init = async () => {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
-      localStreamRef.current = stream;
-    };
-    init();
-  }, []);
-
-  const handleJoin = () => {
-    if (localStreamRef.current) {
-      setVideos((prevVideos) => [
-        ...prevVideos,
-        {
-          id: `video-${prevVideos.length + 1}`,
-          stream: localStreamRef.current,
-        },
-      ]);
+    if (!userName) {
+      navigate('/');
+      return;
     }
-  };
+
+    // Initialize socket connection
+    socketRef.current = io('http://localhost:8080');
+
+    // Join the room
+    socketRef.current.emit('join-room', { roomId, userName });
+
+    // Listen for existing peers
+    socketRef.current.on('existing-peers', ({ peers }) => {
+      setParticipants(peers);
+    });
+
+    // Listen for new users joining
+    socketRef.current.on('user-connected', ({ id, userName }) => {
+      setParticipants((prevParticipants) => [
+        ...prevParticipants,
+        { id, userName },
+      ]);
+    });
+
+    // Listen for users disconnecting
+    socketRef.current.on('user-disconnected', ({ id }) => {
+      setParticipants((prevParticipants) =>
+        prevParticipants.filter((user) => user.id !== id)
+      );
+    });
+
+    // Clean up on component unmount
+    return () => {
+      socketRef.current.disconnect();
+    };
+  }, [userName, roomId, navigate]);
 
   return (
-    <div>
-      <Row>
-        <Button onClick={handleJoin} className="mb-3">
-          Join
-        </Button>
-      </Row>
-      <Row>
-        {videos.map((video) => (
-          <Col key={video.id} xs={12} md={6} lg={4}>
-            <VideoPlayer stream={video.stream} />
-          </Col>
-        ))}
-      </Row>
+    <div className="room-container d-flex">
+      <div className="participants-list border-end p-3">
+        <h3>Participants</h3>
+        <ul className="list-unstyled">
+          {participants.map((user) => (
+            <li key={user.id}>{user.userName}</li>
+          ))}
+        </ul>
+      </div>
+      <div className="screen-sharing flex-fill p-3">
+        {/* Screen sharing component goes here */}
+      </div>
+      <div className="chat-box border-start p-3">
+        {/* Chat component goes here */}
+      </div>
     </div>
   );
 }
 
-// Component to handle video rendering
-function VideoPlayer({ stream }) {
-  const videoRef = useRef(null);
-
-  useEffect(() => {
-    if (videoRef.current) {
-      videoRef.current.srcObject = stream; // Set the MediaStream to the video element
-    }
-  }, [stream]);
-
-  return <video ref={videoRef} autoPlay muted className="w-100" />;
-}
+export default Room;
