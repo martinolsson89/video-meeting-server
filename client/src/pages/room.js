@@ -106,12 +106,14 @@ function Room() {
       screenStreamRef.current = screenStream;
       setIsSharing(true);
 
+      // Add tracks to existing peers
       Object.values(peersRef.current).forEach((peer) => {
         screenStream.getTracks().forEach((track) => {
           peer.addTrack(track, screenStream);
         });
       });
 
+      // Display local shared screen
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = screenStream;
       }
@@ -130,8 +132,11 @@ function Room() {
       screenStreamRef.current = null;
       setIsSharing(false);
 
+      // Remove screen tracks from peers
       Object.values(peersRef.current).forEach((peer) => {
-        peer.removeTrack(peer.streams[0]);
+        peer.streams[0]?.getTracks().forEach((track) => {
+          peer.removeTrack(track, localStreamRef.current);
+        });
       });
 
       if (localVideoRef.current) {
