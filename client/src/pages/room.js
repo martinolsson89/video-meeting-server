@@ -6,10 +6,12 @@ import SimplePeer from 'simple-peer';
 const SIGNALING_SERVER_URL = 'http://localhost:8080';
 
 function Room() {
-  const { roomId } = useParams();
+  const { roomId: routeRoomId } = useParams();
   const navigate = useNavigate();
-  const [userName] = useState(localStorage.getItem('userName'));
+  const [userName] = useState(sessionStorage.getItem('userName'));
+  const [roomId, setRoomId] = useState(() => sessionStorage.getItem('roomId') || routeRoomId);
   const [participants, setParticipants] = useState([]);
+  const [myId, setMyId] = useState('');
   const [isSharing, setIsSharing] = useState(false);
 
   const socketRef = useRef();
@@ -24,8 +26,17 @@ function Room() {
       return;
     }
 
+    // Save userName and roomId to sessionStorage
+    sessionStorage.setItem('userName', userName);
+    sessionStorage.setItem('roomId', roomId);
+
     // Initialize socket connection
     socketRef.current = io(SIGNALING_SERVER_URL);
+
+    // Listen for the 'connect' event to get the socket ID
+    socketRef.current.on('connect', () => {
+      setMyId(socketRef.current.id);
+    });
 
     // Join the room
     socketRef.current.emit('join-room', { roomId, userName });
@@ -150,7 +161,9 @@ function Room() {
         <h3>Participants</h3>
         <ul className="list-unstyled">
           {participants.map((user) => (
-            <li key={user.id}>{user.userName}</li>
+            <li key={user.id}>
+            {user.userName} {user.id === myId ? '(You)' : ''}
+          </li>
           ))}
         </ul>
       </div>

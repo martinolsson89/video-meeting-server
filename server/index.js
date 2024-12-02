@@ -59,17 +59,15 @@ io.on('connection', (socket) => {
 
         if (clients) {
             clients.forEach((clientId) => {
-                if (clientId !== socket.id) {
-                    const clientSocket = io.sockets.sockets.get(clientId);
-                    if (clientSocket) {
-                        connectedPeers.push({
-                            id: clientSocket.id,
-                            userName: clientSocket.userName,
-                        });
-                    }
-                }
+              const clientSocket = io.sockets.sockets.get(clientId);
+              if (clientSocket) {
+                connectedPeers.push({
+                  id: clientSocket.id,
+                  userName: clientSocket.userName,
+                });
+              }
             });
-        }
+          }
 
         socket.emit('existing-peers', { peers: connectedPeers });
 

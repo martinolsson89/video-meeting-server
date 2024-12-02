@@ -10,7 +10,7 @@ function Lobby() {
     e.preventDefault();
     if (userName && roomId) {
       // Save the user name to localStorage or context
-      localStorage.setItem('userName', userName);
+      sessionStorage.setItem('userName', userName);
       // Navigate to the room
       navigate(`/room/${roomId}`);
     }
