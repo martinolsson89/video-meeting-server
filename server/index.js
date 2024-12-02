@@ -89,14 +89,13 @@ io.on('connection', (socket) => {
             });
         });
 
-        // Handle chat messages
-        // socket.on('chat-message', (message) => {
-        //     // Broadcast the message to other users in the room
-        //     socket.to(roomId).emit('chat-message', {
-        //         message: message,
-        //         userName: userName,
-        //     });
-        // });
+        socket.on('chat-message', (message) => {
+            // Broadcast the message to other users in the room
+            socket.to(roomId).emit('chat-message', {
+                message: message,
+                userName: userName,
+            });
+        });
 
     });
 });
