@@ -44,9 +44,9 @@ function Room() {
     // Listen for existing peers and participants
     socketRef.current.on('existing-peers', ({ peers }) => {
       setParticipants(peers);
-      peers.forEach((peerId) => {
-        if (!peersRef.current[peerId]) {
-          initiatePeerConnection(peerId, true); // New peer initiates connection
+      peers.forEach((peer) => {
+        if (!peersRef.current[peer.id] && peer.id !== socketRef.current.id) { // Exclude self
+          initiatePeerConnection(peer.id, true); // New peer initiates connection
         }
       });
     });

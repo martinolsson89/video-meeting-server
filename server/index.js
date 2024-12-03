@@ -59,17 +59,20 @@ io.on('connection', (socket) => {
 
         if (clients) {
             clients.forEach((clientId) => {
-              const clientSocket = io.sockets.sockets.get(clientId);
-              if (clientSocket) {
-                connectedPeers.push({
-                  id: clientSocket.id,
-                  userName: clientSocket.userName,
-                });
-              }
+                if (clientId !== socket.id) { // Exclude the current socket
+                    const clientSocket = io.sockets.sockets.get(clientId);
+                    if (clientSocket) {
+                        connectedPeers.push({
+                            id: clientSocket.id,
+                            userName: clientSocket.userName,
+                        });
+                    }
+                }
             });
-          }
+        }
 
         socket.emit('existing-peers', { peers: connectedPeers });
+
 
         // Handle SDP exchange (offer/answer)
         socket.on('exchangeSDP', (data) => {
