@@ -108,6 +108,16 @@ function Room() {
       initiator,
       trickle: true,
       stream: screenStreamRef.current || undefined,
+      config: {
+        iceTransportPolicy: 'relay', // Forces TURN usage
+        iceServers: [
+          {
+            urls: 'turn:20.93.35.100:3478',
+            username: 'testuser',
+            credential: 'testpassword',
+          },
+        ],
+      },
     };
   
     const peer = new SimplePeer(peerOptions);
