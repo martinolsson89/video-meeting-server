@@ -113,6 +113,11 @@ function Room() {
     const peer = new SimplePeer(peerOptions);
   
     peer.on('signal', (data) => {
+      if (data.candidate) {
+        console.log('Generated ICE Candidate:', data.candidate);
+      } else if (data.type === 'offer' || data.type === 'answer') {
+        console.log('Generated SDP:', data.type);
+      }
       socketRef.current.emit('exchangeSDP', {
         target: peerId,
         sdp: data,
