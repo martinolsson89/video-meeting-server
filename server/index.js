@@ -1,7 +1,10 @@
-const express = require('express');
-const cors = require('cors');
-const { Server } = require('socket.io');
-const http = require('http');
+import express from 'express';
+import cors from 'cors';
+import { Server } from 'socket.io';
+import http from 'http';
+import Janode from 'janode';
+import EchoTestPlugin from 'janode/plugins/echotest';
+
 
 const app = express();
 app.use(cors());
@@ -16,93 +19,76 @@ const io = new Server(server, {
     },
 });
 
-app.get('/', (req, res) => {
-    res.send(`WebRTC Signaling Server is running on port ${port}`);
-});
+(async () => {
+    let connection, session, echoHandle;
+    try {
+        connection = await Janode.connect({
+            is_admin: false,
+            address: { url: 'ws://20.93.35.100:8188/' }
+        });
+        console.log('Successfully connected to Janus server');
 
-io.on('connection', (socket) => {
-    console.log('A user connected:', socket.id);
+        session = await connection.create();
+        console.log(`Session created with ID: ${session.id}`);
 
-    // Handle user disconnect
-    socket.on('disconnect', () => {
-        console.log('User disconnected:', socket.id);
+        echoHandle = await session.attach(EchoTestPlugin);
+        console.log('EchoTest plugin attached successfully');
 
-        // Notify others in the room that the user has left
-        if (socket.roomId) {
-            socket.to(socket.roomId).emit('user-disconnected', {
-                id: socket.id,
-                userName: socket.userName,
-            });
-        }
+    } catch (err) {
+        console.error('Error initializing Janus connection:', err);
+        process.exit(1); // Stop the server if Janus is unreachable
+    }
+
+    app.get('/', (req, res) => {
+        res.send(`WebRTC Signaling Server is running on port ${port}`);
     });
 
-    // Listen for 'join-room' event to handle room joining
-    socket.on('join-room', ({ roomId, userName }) => {
-        console.log(`User ${userName} is joining room ${roomId}`);
+    io.on('connection', (socket) => {
+        console.log('A user connected:', socket.id);
 
-        // Store the user's name and room ID in the socket object
-        socket.userName = userName;
-        socket.roomId = roomId;
-
-        // Join the specified room
-        socket.join(roomId);
-
-        // Notify existing users in the room about the new user
-        socket.to(roomId).emit('user-connected', {
-            id: socket.id,
-            userName: userName,
+        socket.on('disconnect', () => {
+            console.log('User disconnected:', socket.id);
         });
 
-        // Send the list of existing peers in the room to the new user
-        const connectedPeers = [];
-        const clients = io.sockets.adapter.rooms.get(roomId);
+        socket.on('join-room', async ({ roomId, userName }) => {
+            // Join room logic
+            socket.join(roomId);
+            socket.userName = userName;
+            socket.roomId = roomId;
 
-        if (clients) {
-            clients.forEach((clientId) => {
-                if (clientId !== socket.id) { // Exclude the current socket
-                    const clientSocket = io.sockets.sockets.get(clientId);
-                    if (clientSocket) {
-                        connectedPeers.push({
-                            id: clientSocket.id,
-                            userName: clientSocket.userName,
-                        });
-                    }
-                }
-            });
-        }
-
-        socket.emit('existing-peers', { peers: connectedPeers });
-
-
-        // Handle SDP exchange (offer/answer)
-        socket.on('exchangeSDP', (data) => {
-            console.log('SDP exchange from', socket.id, 'to', data.target);
-            io.to(data.target).emit('exchangeSDP', {
-                sdp: data.sdp,
-                sender: socket.id,
-            });
         });
 
-        // Handle ICE candidates
+    
+        socket.on('sendOfferToJanus', async (data) => {
+            const payload = {
+                jsep: data.jsep,
+                audio: true,
+                video: true
+            };
+
+            try {
+                const startResponse = await echoHandle.start(payload);
+                // startResponse.jsep contains the SDP answer from Janus
+                console.log("Janus Answer SDP:", startResponse.jsep);
+                socket.emit('janusAnswer', { jsep: startResponse.jsep });
+            } catch (err) {
+                console.error('Error starting EchoTest:', err);
+            }
+        });
+
+        // Handle ICE candidates from the client and send them to Janus
         socket.on('candidate', (data) => {
-            console.log('ICE candidate from', socket.id, 'to', data.target);
-            io.to(data.target).emit('candidate', {
-                candidate: data.candidate,
-                sender: socket.id,
-            });
-        });
-
-        // Handle chat message
-        socket.on('chat-message', (message) => {
-            // Broadcast the message to other users in the room
-            socket.to(roomId).emit('chat-message', {
-                message: message,
-                userName: userName,
+            // data should have { candidate: {candidate: "...", sdpMid: "...", sdpMLineIndex: ...} }
+            // Trickle to Janus
+            echoHandle.trickle({
+                candidate: data.candidate.candidate,
+                sdpMid: data.candidate.sdpMid,
+                sdpMLineIndex: data.candidate.sdpMLineIndex,
             });
         });
     });
-});
 
-server.listen(port, () => {
-    console.log(`Signaling server running on http://localhost:${port}`);
-});
+    server.listen(port, () => {
+        console.log(`Signaling server running on http://localhost:${port}`);
+    });
+})();
