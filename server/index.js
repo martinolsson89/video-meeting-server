@@ -24,7 +24,7 @@ const io = new Server(server, {
     try {
         connection = await Janode.connect({
             is_admin: false,
-            address: { url: 'ws://20.93.35.100:8088/' }
+            address: { url: 'ws://20.93.35.100:8091/janus' }
         });
         console.log('Successfully connected to Janus server');
 
@@ -65,6 +65,7 @@ const io = new Server(server, {
                 audio: true,
                 video: true
             };
+            console.log("EchoTest start payload:", payload);
 
             try {
                 const startResponse = await echoHandle.start(payload);
@@ -78,12 +79,13 @@ const io = new Server(server, {
 
         // Handle ICE candidates from the client and send them to Janus
         socket.on('candidate', (data) => {
-            // data should have { candidate: {candidate: "...", sdpMid: "...", sdpMLineIndex: ...} }
-            // Trickle to Janus
+            console.log('Candidate received from client:', data);
             echoHandle.trickle({
+              candidate: {
                 candidate: data.candidate.candidate,
                 sdpMid: data.candidate.sdpMid,
-                sdpMLineIndex: data.candidate.sdpMLineIndex,
+                sdpMLineIndex: data.candidate.sdpMLineIndex
+              }
             });
         });
     });

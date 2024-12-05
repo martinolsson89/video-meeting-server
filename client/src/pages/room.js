@@ -9,6 +9,7 @@ function Room() {
   const navigate = useNavigate();
   const [userName] = useState(sessionStorage.getItem('userName'));
   const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
   const pc = useRef(null);
 
   useEffect(() => {
@@ -29,7 +30,8 @@ function Room() {
           username: 'testuser',
           credential: 'testpassword'
         }
-      ]
+      ],
+        iceTransportPolicy: 'relay' // Force TURN server usage
     });
 
     // When we receive ICE candidates from the server, add them to the PC
@@ -41,12 +43,17 @@ function Room() {
 
     // When we receive the Janus answer, set it as the remote description
     socket.on('janusAnswer', async ({ jsep }) => {
-      await pc.current.setRemoteDescription(jsep);
-      console.log('Remote description set from Janus');
+      try {
+        await pc.current.setRemoteDescription(jsep);
+        console.log('Remote description successfully set:', jsep);
+      } catch (error) {
+        console.error('Error setting remote description:', error);
+      }
     });
 
     // Local ICE candidates need to be sent to the server (which then sends to Janus)
     pc.current.onicecandidate = ({ candidate }) => {
+      console.log('Local ICE candidate:', candidate);
       if (candidate) {
         socket.emit('candidate', { candidate });
       }
@@ -55,8 +62,10 @@ function Room() {
     // When remote track arrives (the echo from Janus), display it
     pc.current.ontrack = (event) => {
       const [remoteStream] = event.streams;
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = remoteStream;
+      console.log('ontrack event triggered:', event);
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = remoteStream;
+        console.log('Remote stream attached:', remoteStream);
       }
     };
 
@@ -101,6 +110,7 @@ function Room() {
           <p>Your local video below will be sent to Janus and echoed back (delayed):</p>
           <div className="ratio ratio-16x9">
             <video ref={localVideoRef} className="w-100 h-100" playsInline autoPlay muted />
+            <video ref={remoteVideoRef} className="w-100 h-100" playsInline autoPlay />
           </div>
         </div>
       </div>
