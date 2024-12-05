@@ -24,7 +24,7 @@ const io = new Server(server, {
     try {
         connection = await Janode.connect({
             is_admin: false,
-            address: { url: 'ws://20.93.35.100:8188/' }
+            address: { url: 'ws://20.93.35.100:8088/' }
         });
         console.log('Successfully connected to Janus server');
 

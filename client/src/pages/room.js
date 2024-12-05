@@ -2,8 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
 
-const SIGNALING_SERVER_URL = "http://localhost:8080";
-const socket = io(SIGNALING_SERVER_URL);
+const socket = io("http://localhost:8080");
 
 function Room() {
   const { roomId } = useParams();
