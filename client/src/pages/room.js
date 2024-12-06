@@ -1,117 +1,224 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+// room.js (Client)
+import React, { useEffect, useRef, useState } from 'react';
 import io from 'socket.io-client';
 
-const socket = io("http://localhost:8080");
-
 function Room() {
-  const { roomId } = useParams();
-  const navigate = useNavigate();
-  const [userName] = useState(sessionStorage.getItem('userName'));
   const localVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
   const pc = useRef(null);
+  const socketRef = useRef(null); // Reference to Socket.io client
+  const [isConnecting, setIsConnecting] = useState(false); // Indicates if connection is in progress
+  const [isConnected, setIsConnected] = useState(false); // Indicates if connection is established
+  const [error, setError] = useState(null); // Holds any connection errors
 
-  useEffect(() => {
-    if (!userName) {
-      navigate('/');
+  // Function to initiate the Echo Test
+  const startEchoTest = async () => {
+    if (isConnecting || isConnected) {
+      console.warn('🔔 Echo Test is already in progress or connected.');
       return;
     }
 
-    // Save userName and roomId to sessionStorage if needed
-    sessionStorage.setItem('userName', userName);
-    sessionStorage.setItem('roomId', roomId);
+    setIsConnecting(true);
+    setError(null); // Reset any previous errors
 
-    // Initialize RTCPeerConnection
-    pc.current = new RTCPeerConnection({
-      iceServers: [
-        {
-          urls: 'turn:20.93.35.100:3478',
-          username: 'testuser',
-          credential: 'testpassword'
-        }
-      ],
-        iceTransportPolicy: 'relay' // Force TURN server usage
-    });
-
-    // When we receive ICE candidates from the server, add them to the PC
-    socket.on('candidate', ({ candidate }) => {
-      if (candidate) {
-        pc.current.addIceCandidate(candidate);
-      }
-    });
-
-    // When we receive the Janus answer, set it as the remote description
-    socket.on('janusAnswer', async ({ jsep }) => {
-      try {
-        await pc.current.setRemoteDescription(jsep);
-        console.log('Remote description successfully set:', jsep);
-      } catch (error) {
-        console.error('Error setting remote description:', error);
-      }
-    });
-
-    // Local ICE candidates need to be sent to the server (which then sends to Janus)
-    pc.current.onicecandidate = ({ candidate }) => {
-      console.log('Local ICE candidate:', candidate);
-      if (candidate) {
-        socket.emit('candidate', { candidate });
-      }
-    };
-
-    // When remote track arrives (the echo from Janus), display it
-    pc.current.ontrack = (event) => {
-      const [remoteStream] = event.streams;
-      console.log('ontrack event triggered:', event);
-      if (remoteVideoRef.current) {
-        remoteVideoRef.current.srcObject = remoteStream;
-        console.log('Remote stream attached:', remoteStream);
-      }
-    };
-
-    // Start the call to Janus after we get user media
-    startCall();
-
-    // Cleanup on unmount
-    return () => {
-      socket.off('candidate');
-      socket.off('janusAnswer');
-      pc.current && pc.current.close();
-      socket.disconnect();
-    };
-  }, [userName, roomId, navigate]);
-
-  async function startCall() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      // Add local tracks to the PC so Janus can echo them back
-      stream.getTracks().forEach(track => pc.current.addTrack(track, stream));
+      // Initialize Socket.io client
+      socketRef.current = io("http://localhost:8080"); // Update with your server URL if different
 
-      // Show local stream
+      // Handle successful socket connection
+      socketRef.current.on('connect', async () => {
+        console.log('🔗 Socket connected:', socketRef.current.id);
+        await initiateWebRTCConnection();
+      });
+
+      // Handle incoming ICE candidates from Janus
+      socketRef.current.on('candidate', async ({ candidate }) => {
+        if (candidate) {
+          console.log('📩 Received ICE candidate from Janus:', candidate);
+          try {
+            await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
+            console.log('✅ Added ICE candidate from Janus successfully');
+          } catch (error) {
+            console.error('❌ Error adding received ICE candidate:', error);
+          }
+        }
+      });
+
+      // Handle SDP Answer from Janus
+      socketRef.current.on('janusAnswer', async ({ jsep }) => {
+        console.log('📩 Received Janus SDP answer:', jsep);
+        try {
+          await pc.current.setRemoteDescription(new RTCSessionDescription(jsep));
+          console.log('✅ Remote description set successfully');
+          setIsConnected(true);
+          setIsConnecting(false);
+        } catch (error) {
+          console.error('❌ Error setting remote description:', error);
+          setError('Failed to set remote description.');
+          setIsConnecting(false);
+        }
+      });
+
+      // Handle socket errors
+      socketRef.current.on('error', (error) => {
+        console.error('🔴 Socket encountered an error:', error);
+        setError('Socket encountered an error.');
+        setIsConnecting(false);
+      });
+
+      // Handle socket disconnection
+      socketRef.current.on('disconnect', (reason) => {
+        console.log('❌ Socket disconnected:', reason);
+        setIsConnected(false);
+        setIsConnecting(false);
+        // Optionally reset peer connection or UI elements here
+      });
+    } catch (err) {
+      console.error('❌ Error initiating Echo Test:', err);
+      setError('Failed to initiate Echo Test.');
+      setIsConnecting(false);
+    }
+  };
+
+  // Function to initiate WebRTC connection
+  const initiateWebRTCConnection = async () => {
+    try {
+      // Initialize RTCPeerConnection
+      pc.current = new RTCPeerConnection({
+        iceServers: [
+          {
+            urls: 'turn:20.93.35.100:3478', // Your TURN server
+            username: 'testuser',           // TURN username
+            credential: 'testpassword',     // TURN password
+          },
+        ],
+        iceTransportPolicy: 'relay', // Force TURN server usage
+      });
+
+      // Handle ICE candidates generated by the local peer
+      pc.current.onicecandidate = ({ candidate }) => {
+        console.log('📨 Generated local ICE candidate:', candidate);
+        if (candidate) {
+          socketRef.current.emit('candidate', { candidate });
+          console.log('📤 Sent local ICE candidate to server');
+        }
+      };
+
+      // Handle incoming media tracks from Janus
+      pc.current.ontrack = (event) => {
+        console.log('📡 Received remote track:', event);
+        const [remoteStream] = event.streams;
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = remoteStream;
+          console.log('✅ Remote stream attached to video element');
+        }
+      };
+
+      // Handle connection state changes
+      pc.current.onconnectionstatechange = () => {
+        console.log('🔄 Connection state change:', pc.current.connectionState);
+        if (
+          pc.current.connectionState === 'failed' ||
+          pc.current.connectionState === 'disconnected' ||
+          pc.current.connectionState === 'closed'
+        ) {
+          console.warn('⚠️ Peer connection closed or failed');
+          setIsConnected(false);
+          setIsConnecting(false);
+          // Optionally handle reconnection or UI updates here
+        }
+      };
+
+      // Obtain user media
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      console.log('🎥 Obtained local media stream:', stream);
+
+      // Attach local stream to video element
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
+        console.log('✅ Local stream attached to video element');
       }
 
+      // Add local tracks to RTCPeerConnection
+      stream.getTracks().forEach((track) => {
+        pc.current.addTrack(track, stream);
+        console.log(`🔗 Added local track: ${track.kind}`);
+      });
+
+      // Create SDP offer
       const offer = await pc.current.createOffer();
       await pc.current.setLocalDescription(offer);
+      console.log('📄 Created and set local SDP offer:', offer);
 
-      // Send the offer to the server to pass to Janus
-      socket.emit('sendOfferToJanus', { jsep: offer });
-    } catch (err) {
-      console.error('Error starting call:', err);
+      // Send SDP offer to server (and hence to Janus)
+      socketRef.current.emit('sendOfferToJanus', { jsep: offer });
+      console.log('📤 Sent SDP offer to Janus via server');
+    } catch (error) {
+      console.error('❌ Error during WebRTC connection setup:', error);
+      setError('Failed to set up WebRTC connection.');
+      setIsConnecting(false);
     }
-  }
+  };
+
+  // Cleanup function to close connections
+  useEffect(() => {
+    return () => {
+      console.log('🧹 Cleaning up connections');
+      if (pc.current) {
+        pc.current.close();
+      }
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
+  }, []);
 
   return (
     <div className="container-fluid vh-100 d-flex flex-column">
       <div className="row flex-fill">
         <div className="col-12 p-3 overflow-auto">
-          <h2>Janus Echo Test</h2>
-          <p>Your local video below will be sent to Janus and echoed back (delayed):</p>
-          <div className="ratio ratio-16x9">
-            <video ref={localVideoRef} className="w-100 h-100" playsInline autoPlay muted />
-            <video ref={remoteVideoRef} className="w-100 h-100" playsInline autoPlay />
+          <h2 className="mb-4">Janus Echo Test</h2>
+          <p>Your local video below is sent to Janus and echoed back:</p>
+          <div
+            className="d-flex justify-content-center align-items-center"
+            style={{ gap: '20px', marginBottom: '20px' }}
+          >
+            <div className="video-container">
+              <h5>Local Video</h5>
+              <video
+                ref={localVideoRef}
+                className="border"
+                style={{ width: '400px', height: '300px' }}
+                playsInline
+                autoPlay
+                muted
+              />
+            </div>
+            <div className="video-container">
+              <h5>Remote Video</h5>
+              <video
+                ref={remoteVideoRef}
+                className="border"
+                style={{ width: '400px', height: '300px' }}
+                playsInline
+                autoPlay
+              />
+            </div>
           </div>
+          <div className="text-center">
+            <button
+              onClick={startEchoTest}
+              className="btn btn-primary btn-lg"
+              disabled={isConnecting || isConnected}
+            >
+              {isConnecting ? 'Connecting...' : isConnected ? 'Connected' : 'Start Echo Test'}
+            </button>
+          </div>
+          {error && (
+            <div className="alert alert-danger mt-3" role="alert">
+              {error}
+            </div>
+          )}
         </div>
       </div>
     </div>
