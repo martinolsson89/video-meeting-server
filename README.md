@@ -1,15 +1,42 @@
-**Server Dependencies:**
+# Video Meeting Server
+
+This repository contains a **React client application** and a **Node.js signaling server** for real-time communication. Below are the installation instructions.
+
+## Prerequisites
+
+Ensure you have the following installed:
+
+- Node.js (v14 or higher)
+- npm (Node Package Manager)
+
+## Installation
+
+### 1. Clone the Repository
 ```bash
-npm install express
-npm install cors socket.io
-npm install ws
-npm install janode
+git clone https://github.com/martinolsson89/video-meeting-server.git
+cd <repository-directory>
 ```
-**Client Dependencies:**
+
+### 2. Set Up the Server
+Navigate to the `server` folder and install dependencies:
 ```bash
-npm install react-router-dom
-npm install react-bootstrap bootstrap
-npm install simple-peer uuid
-npm install socket.io-client
-npm install process
+cd server
+npm install express cors socket.io ws janode
+```
+
+Start the server:
+```bash
+node index.js
+```
+
+### 3. Set Up the Client
+Navigate to the `client` folder and install dependencies:
+```bash
+cd client
+npm install react-router-dom react-bootstrap bootstrap simple-peer uuid socket.io-client process
+```
+
+Start the client application:
+```bash
+npm start
 ```
