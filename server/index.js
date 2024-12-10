@@ -55,20 +55,18 @@ let connection, session;
                     console.log(`✅ VideoRoom plugin attached for socket: ${socket.id}`);
                 }
         
-                // Ensure roomId is a valid positive integer
                 const numericRoomId = parseInt(roomId, 10);
                 if (isNaN(numericRoomId) || numericRoomId <= 0) {
-                    console.warn(`⚠️ Invalid roomId: "${roomId}". Defaulting to 1234.`);
                     throw new Error('Room ID must be a positive integer');
                 }
-        
+
                 const roomInfo = await socket.videoHandle.list();
                 const roomExists = roomInfo.list.some((room) => room.room === numericRoomId);
         
                 if (!roomExists) {
-                    console.log(`🔨 Creating room ${numericRoomId}`);
+                    console.log(`🔨 Creating room ${roomId} (numeric ID: ${numericRoomId})`);
                     await socket.videoHandle.create({ room: numericRoomId, publishers: 10 });
-                    console.log(`✅ Room ${numericRoomId} created`);
+                    console.log(`✅ Room ${roomId} created`);
                 }
         
                 const joinResponse = await socket.videoHandle.joinPublisher({
@@ -76,15 +74,24 @@ let connection, session;
                     display: displayName || `User-${socket.id}`,
                 });
         
-                console.log(`📥 User ${socket.id} joined room ${numericRoomId}`);
+                console.log(`📥 User ${socket.id} joined room ${roomId} (numeric ID: ${numericRoomId})`);
                 socket.emit('joinedRoom', { roomId: numericRoomId, jsep: joinResponse.jsep });
+
+                // Logically join the room via Socket.io
+                socket.join(roomId);
+        
+                // Fetch participants
+                const participantsData = await socket.videoHandle.listParticipants({ room: numericRoomId });
+                const participantNames = participantsData.participants.map((p) => p.display);
+                console.log(`👥 Participants in room ${roomId}:`, participantNames);
+
+                // Emit updated participant list to all in the room
+                io.in(roomId).emit('participantsUpdate', participantNames);
             } catch (err) {
                 console.error(`❌ Error handling 'joinRoom' for ${socket.id}:`, err);
-                socket.emit('error', { message: err.message });
+                socket.emit('error', { message: 'Failed to join room', details: err.message });
             }
         });
-        
-        
     
         socket.on('offer', async ({ jsep, roomId }) => {
             try {

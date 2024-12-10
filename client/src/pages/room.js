@@ -9,69 +9,72 @@ function Room() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState(null);
-  const [roomId, setRoomId] = useState("1234"); // Default room
+  const [roomId, setRoomId] = useState("1234"); // Default room name
 
   const startRoom = async () => {
     if (isConnecting || isConnected) {
-        console.warn('🔔 Already in a room.');
-        return;
+      console.warn('🔔 Already in a room.');
+      return;
     }
 
     setIsConnecting(true);
     setError(null);
 
     try {
-        socketRef.current = io("http://localhost:8080");
+      socketRef.current = io("http://localhost:8080");
 
-        socketRef.current.on('connect', () => {
-            console.log('🔗 Socket connected:', socketRef.current.id);
-            joinRoom();
-        });
+      socketRef.current.on('connect', () => {
+        console.log('🔗 Socket connected:', socketRef.current.id);
+        joinRoom();
+      });
 
-        socketRef.current.on('userJoined', async ({ userId }) => {
-            console.log(`🟢 User joined: ${userId}`);
-            await createPeerConnection(userId);
-        });
+      socketRef.current.on('userJoined', async ({ userId }) => {
+        console.log(`🟢 User joined: ${userId}`);
+        await createPeerConnection(userId);
+      });
 
-        socketRef.current.on('offer', async ({ userId, jsep }) => {
-            console.log(`📩 Received offer from ${userId}:`, jsep);
-            await handleOffer(userId, jsep);
-        });
+      socketRef.current.on('offer', async ({ userId, jsep }) => {
+        console.log(`📩 Received offer from ${userId}:`, jsep);
+        await handleOffer(userId, jsep);
+      });
 
-        socketRef.current.on('answer', async ({ userId, jsep }) => {
-            console.log(`📩 Received answer from ${userId}:`, jsep);
-            await pc.current[userId].setRemoteDescription(new RTCSessionDescription(jsep));
-        });
+      socketRef.current.on('answer', async ({ userId, jsep }) => {
+        console.log(`📩 Received answer from ${userId}:`, jsep);
+        await pc.current[userId].setRemoteDescription(new RTCSessionDescription(jsep));
+      });
 
-        socketRef.current.on('candidate', ({ userId, candidate }) => {
-            console.log(`📨 Received ICE candidate from ${userId}:`, candidate);
-            if (pc.current[userId]) {
-                pc.current[userId].addIceCandidate(new RTCIceCandidate(candidate));
-            }
-        });
+      socketRef.current.on('candidate', ({ userId, candidate }) => {
+        console.log(`📨 Received ICE candidate from ${userId}:`, candidate);
+        if (pc.current[userId]) {
+          pc.current[userId].addIceCandidate(new RTCIceCandidate(candidate));
+        }
+      });
 
-        socketRef.current.on('userLeft', ({ userId }) => {
-            console.log(`❌ User left: ${userId}`);
-            if (pc.current[userId]) {
-                pc.current[userId].close();
-                delete pc.current[userId];
-            }
-            delete remoteVideosRef.current[userId];
-            setIsConnected(Object.keys(pc.current).length > 0);
-        });
+      socketRef.current.on('userLeft', ({ userId }) => {
+        console.log(`❌ User left: ${userId}`);
+        if (pc.current[userId]) {
+          pc.current[userId].close();
+          delete pc.current[userId];
+        }
+        delete remoteVideosRef.current[userId];
+        setIsConnected(Object.keys(pc.current).length > 0);
+      });
 
-        socketRef.current.on('error', (err) => {
-            console.error('🔴 Socket error:', err);
-            setError('Socket error.');
-            setIsConnecting(false);
-        });
-    } catch (err) {
-        console.error('❌ Error starting room:', err);
-        setError('Failed to start room.');
+      socketRef.current.on('participantsUpdate', (participants) => {
+        console.log('👥 Participants in room:', participants);
+      });
+
+      socketRef.current.on('error', (err) => {
+        console.error('🔴 Socket error:', err);
+        setError('Socket error.');
         setIsConnecting(false);
+      });
+    } catch (err) {
+      console.error('❌ Error starting room:', err);
+      setError('Failed to start room.');
+      setIsConnecting(false);
     }
-};
-
+  };
 
   const joinRoom = async () => {
     try {
