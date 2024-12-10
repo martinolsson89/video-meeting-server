@@ -9,7 +9,7 @@ function Room() {
   const [isConnecting, setIsConnecting] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState(null);
-  const [roomId, setRoomId] = useState("room-1234"); // Default room
+  const [roomId, setRoomId] = useState("1234"); // Default room
 
   const startRoom = async () => {
     if (isConnecting || isConnected) {

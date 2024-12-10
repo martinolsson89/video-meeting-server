@@ -4,7 +4,7 @@ import cors from 'cors';
 import { Server } from 'socket.io';
 import http from 'http';
 import Janode from 'janode';
-import EchoTestPlugin from 'janode/plugins/echotest';
+import VideoRoomPlugin from 'janode/plugins/videoroom';
 
 const app = express();
 app.use(cors());
@@ -46,68 +46,78 @@ let connection, session;
     io.on('connection', (socket) => {
         console.log(`🔗 A user connected: ${socket.id}`);
     
-        socket.on('joinRoom', async ({ roomId }) => {
+        socket.on('joinRoom', async ({ roomId, displayName }) => {
             try {
-                console.log(`🚪 User ${socket.id} joined room ${roomId}`);
-                socket.join(roomId);
-                socket.to(roomId).emit('userJoined', { userId: socket.id });
-    
-                // Log room details
-                const roomSockets = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
-                console.log(`📋 Users in room ${roomId}:`, roomSockets);
+                console.log(`🚪 User ${socket.id} is joining room ${roomId}`);
+        
+                if (!socket.videoHandle) {
+                    socket.videoHandle = await session.attach(VideoRoomPlugin);
+                    console.log(`✅ VideoRoom plugin attached for socket: ${socket.id}`);
+                }
+        
+                // Ensure roomId is a valid positive integer
+                const numericRoomId = parseInt(roomId, 10);
+                if (isNaN(numericRoomId) || numericRoomId <= 0) {
+                    console.warn(`⚠️ Invalid roomId: "${roomId}". Defaulting to 1234.`);
+                    throw new Error('Room ID must be a positive integer');
+                }
+        
+                const roomInfo = await socket.videoHandle.list();
+                const roomExists = roomInfo.list.some((room) => room.room === numericRoomId);
+        
+                if (!roomExists) {
+                    console.log(`🔨 Creating room ${numericRoomId}`);
+                    await socket.videoHandle.create({ room: numericRoomId, publishers: 10 });
+                    console.log(`✅ Room ${numericRoomId} created`);
+                }
+        
+                const joinResponse = await socket.videoHandle.joinPublisher({
+                    room: numericRoomId,
+                    display: displayName || `User-${socket.id}`,
+                });
+        
+                console.log(`📥 User ${socket.id} joined room ${numericRoomId}`);
+                socket.emit('joinedRoom', { roomId: numericRoomId, jsep: joinResponse.jsep });
             } catch (err) {
                 console.error(`❌ Error handling 'joinRoom' for ${socket.id}:`, err);
+                socket.emit('error', { message: err.message });
             }
         });
+        
+        
     
-        socket.on('offer', async ({ userId, jsep }) => {
+        socket.on('offer', async ({ jsep, roomId }) => {
             try {
-                console.log(`📩 Received 'offer' from ${socket.id} for user ${userId}:`, jsep);
+                console.log(`📩 Received 'offer' from ${socket.id} for room ${roomId}`);
     
-                // Attach EchoTest plugin handle for the user
-                if (!socket.echoHandle) {
-                    socket.echoHandle = await session.attach(EchoTestPlugin);
-                    console.log(`✅ EchoTest plugin attached for socket: ${socket.id}`);
+                if (socket.videoHandle) {
+                    const configureResponse = await socket.videoHandle.configure({
+                        jsep,
+                        audio: true,
+                        video: true,
+                    });
+    
+                    console.log(`🚀 Configured plugin for socket ${socket.id}`);
+                    socket.emit('answer', { jsep: configureResponse.jsep });
                 }
-    
-                // Start the session with the received offer
-                const payload = { jsep, audio: true, video: true };
-                console.log(`🚀 Starting EchoTest for socket ${socket.id}`);
-                const startResponse = await socket.echoHandle.start(payload);
-    
-                // Send the SDP answer back to the client
-                socket.to(userId).emit('answer', { userId: socket.id, jsep: startResponse.jsep });
-                console.log(`🟢 Sent SDP answer to user ${userId}`);
             } catch (err) {
                 console.error(`❌ Error handling 'offer' for socket ${socket.id}:`, err);
+                socket.emit('error', { message: 'Failed to handle offer', details: err.message });
             }
         });
     
-        socket.on('answer', ({ userId, jsep }) => {
+        socket.on('candidate', ({ candidate }) => {
             try {
-                console.log(`📩 Received 'answer' from ${socket.id} for user ${userId}:`, jsep);
-                socket.to(userId).emit('answer', { userId: socket.id, jsep });
-            } catch (err) {
-                console.error(`❌ Error handling 'answer' for ${socket.id}:`, err);
-            }
-        });
+                console.log(`📨 Received ICE candidate from ${socket.id}:`, candidate);
     
-        socket.on('candidate', ({ userId, candidate }) => {
-            try {
-                console.log(`📨 Received ICE candidate from ${socket.id} for user ${userId}:`, candidate);
-    
-                if (socket.echoHandle) {
-                    // Send candidate to Janus
-                    socket.echoHandle.trickle({
+                if (socket.videoHandle) {
+                    socket.videoHandle.trickle({
                         candidate: candidate.candidate,
                         sdpMid: candidate.sdpMid,
                         sdpMLineIndex: candidate.sdpMLineIndex,
                     });
                     console.log(`🔄 Sent ICE candidate to Janus for socket ${socket.id}`);
                 }
-    
-                // Forward candidate to the intended user
-                socket.to(userId).emit('candidate', { userId: socket.id, candidate });
             } catch (err) {
                 console.error(`❌ Error handling 'candidate' for ${socket.id}:`, err);
             }
@@ -116,19 +126,15 @@ let connection, session;
         socket.on('disconnect', async () => {
             try {
                 console.log(`❌ User disconnected: ${socket.id}`);
-                if (socket.echoHandle) {
-                    await socket.echoHandle.detach();
-                    console.log(`🧹 EchoHandle detached for socket: ${socket.id}`);
+                if (socket.videoHandle) {
+                    await socket.videoHandle.detach();
+                    console.log(`🧹 VideoHandle detached for socket: ${socket.id}`);
                 }
-                socket.broadcast.emit('userLeft', { userId: socket.id });
             } catch (err) {
                 console.error(`❌ Error during 'disconnect' for ${socket.id}:`, err);
             }
         });
     });
-    
-    
-    
 
     // Start the server
     server.listen(PORT, () => {
