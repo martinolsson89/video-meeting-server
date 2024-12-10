@@ -1,265 +1,230 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+// room.js (Client)
+import React, { useEffect, useRef, useState } from 'react';
 import io from 'socket.io-client';
-import SimplePeer from 'simple-peer';
-
-const SIGNALING_SERVER_URL = 'http://localhost:8080';
 
 function Room() {
-  const { roomId: routeRoomId } = useParams();
-  const navigate = useNavigate();
-  const [userName] = useState(sessionStorage.getItem('userName'));
-  const [roomId, setRoomId] = useState(() => sessionStorage.getItem('roomId') || routeRoomId);
-  const [participants, setParticipants] = useState([]);
-  const [myId, setMyId] = useState('');
-  const [isSharing, setIsSharing] = useState(false);
-
-  const socketRef = useRef();
-  const peersRef = useRef({});
-  const screenStreamRef = useRef(null);
   const localVideoRef = useRef(null);
-  const remoteVideoRefs = useRef({});
+  const remoteVideoRef = useRef(null);
+  const pc = useRef(null);
+  const socketRef = useRef(null); // Reference to Socket.io client
+  const [isConnecting, setIsConnecting] = useState(false); // Indicates if connection is in progress
+  const [isConnected, setIsConnected] = useState(false); // Indicates if connection is established
+  const [error, setError] = useState(null); // Holds any connection errors
 
-  useEffect(() => {
-    if (!userName) {
-      navigate('/');
+  // Function to initiate the Echo Test
+  const startEchoTest = async () => {
+    if (isConnecting || isConnected) {
+      console.warn('🔔 Echo Test is already in progress or connected.');
       return;
     }
-  
-    // Save userName and roomId to sessionStorage
-    sessionStorage.setItem('userName', userName);
-    sessionStorage.setItem('roomId', roomId);
-  
-    // Initialize socket connection
-    socketRef.current = io(SIGNALING_SERVER_URL);
-  
-    // Listen for the 'connect' event to get the socket ID
-    socketRef.current.on('connect', () => {
-      setMyId(socketRef.current.id);
-    });
-  
-    // Join the room
-    socketRef.current.emit('join-room', { roomId, userName });
-  
-    // Listen for existing peers and participants
-    socketRef.current.on('existing-peers', ({ peers }) => {
-      setParticipants(peers);
-      peers.forEach((peer) => {
-        if (!peersRef.current[peer.id] && peer.id !== socketRef.current.id) {
-          initiatePeerConnection(peer.id, true);
+
+    setIsConnecting(true);
+    setError(null); // Reset any previous errors
+
+    try {
+      // Initialize Socket.io client
+      socketRef.current = io("http://localhost:8080"); // Update with your server URL if different
+
+      // Handle successful socket connection
+      socketRef.current.on('connect', async () => {
+        console.log('🔗 Socket connected:', socketRef.current.id);
+        await initiateWebRTCConnection();
+      });
+
+      // Handle incoming ICE candidates from Janus
+      socketRef.current.on('candidate', async ({ candidate }) => {
+        if (candidate) {
+          console.log('📩 Received ICE candidate from Janus:', candidate);
+          try {
+            await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
+            console.log('✅ Added ICE candidate from Janus successfully');
+          } catch (error) {
+            console.error('❌ Error adding received ICE candidate:', error);
+          }
         }
       });
-    });
-  
-    // Listen for new users joining
-    socketRef.current.on('user-connected', ({ id, userName }) => {
-      setParticipants((prevParticipants) => [
-        ...prevParticipants,
-        { id, userName },
-      ]);
-      if (!peersRef.current[id]) {
-        initiatePeerConnection(id, false);
-      }
-    });
-  
-    // Listen for users disconnecting
-    socketRef.current.on('user-disconnected', ({ id }) => {
-      setParticipants((prevParticipants) =>
-        prevParticipants.filter((user) => user.id !== id)
-      );
-      if (peersRef.current[id]) {
-        peersRef.current[id].destroy();
-        delete peersRef.current[id];
-        if (remoteVideoRefs.current[id]) {
-          remoteVideoRefs.current[id].srcObject = null;
-          delete remoteVideoRefs.current[id];
-        }
-      }
-    });
-  
-    // Handle incoming exchangeSDP events
-    socketRef.current.on('exchangeSDP', ({ sdp, sender }) => {
-      if (peersRef.current[sender]) {
-        peersRef.current[sender].signal(sdp);
-      } else {
-        initiatePeerConnection(sender, false);
-      }
-    });
-  
-      // Handle incoming candidate events (if using trickle ICE)
-  socketRef.current.on('candidate', ({ candidate, sender }) => {
-    if (peersRef.current[sender]) {
-      peersRef.current[sender].signal(candidate);
-    }
-  });
-  
-    // Cleanup on component unmount
-    return () => {
-      socketRef.current.off('exchangeSDP');
-      socketRef.current.off('candidate');
-      socketRef.current.disconnect();
-      Object.values(peersRef.current).forEach((peer) => peer.destroy());
-    };
-  }, [userName, roomId, navigate]);
-  
 
-  const initiatePeerConnection = (peerId, initiator = true) => {
-    const peerOptions = {
-      initiator,
-      trickle: true,
-      stream: screenStreamRef.current || undefined,
-      config: {
-        iceTransportPolicy: 'relay', // Forces TURN usage
+      // Handle SDP Answer from Janus
+      socketRef.current.on('janusAnswer', async ({ jsep }) => {
+        console.log('📩 Received Janus SDP answer:', jsep);
+        try {
+          await pc.current.setRemoteDescription(new RTCSessionDescription(jsep));
+          console.log('✅ Remote description set successfully');
+          setIsConnected(true);
+          setIsConnecting(false);
+        } catch (error) {
+          console.error('❌ Error setting remote description:', error);
+          setError('Failed to set remote description.');
+          setIsConnecting(false);
+        }
+      });
+
+      // Handle socket errors
+      socketRef.current.on('error', (error) => {
+        console.error('🔴 Socket encountered an error:', error);
+        setError('Socket encountered an error.');
+        setIsConnecting(false);
+      });
+
+      // Handle socket disconnection
+      socketRef.current.on('disconnect', (reason) => {
+        console.log('❌ Socket disconnected:', reason);
+        setIsConnected(false);
+        setIsConnecting(false);
+        // Optionally reset peer connection or UI elements here
+      });
+    } catch (err) {
+      console.error('❌ Error initiating Echo Test:', err);
+      setError('Failed to initiate Echo Test.');
+      setIsConnecting(false);
+    }
+  };
+
+  // Function to initiate WebRTC connection
+  const initiateWebRTCConnection = async () => {
+    try {
+      // Initialize RTCPeerConnection
+      pc.current = new RTCPeerConnection({
         iceServers: [
           {
-            urls: 'turn:20.93.35.100:3478',
-            username: 'testuser',
-            credential: 'testpassword',
+            urls: 'stun:stun.l.google.com:19302', // Google STUN server
+          },
+          {
+            urls: 'turn:20.93.35.100:3478', // Your TURN server
+            username: 'testuser',           // TURN username
+            credential: 'testpassword',     // TURN password
           },
         ],
-      },
-    };
-  
-    const peer = new SimplePeer(peerOptions);
-  
-    peer.on('signal', (data) => {
-      if (data.candidate) {
-        console.log('Generated ICE Candidate:', data.candidate);
-      } else if (data.type === 'offer' || data.type === 'answer') {
-        console.log('Generated SDP:', data.type);
-      }
-      socketRef.current.emit('exchangeSDP', {
-        target: peerId,
-        sdp: data,
+        iceTransportPolicy: 'all', // Allows both STUN and TURN servers
       });
-    });
-  
-    peer.on('stream', (remoteStream) => {
-      console.log(`Received remote stream from ${peerId}`);
-      if (!remoteVideoRefs.current[peerId]) {
-        const videoContainer = document.createElement('div');
-    videoContainer.className = 'col-12 mb-3';
 
-    const videoTitle = document.createElement('h5');
-    videoTitle.innerText = `Screen from ${participants.find(p => p.id === peerId)?.userName || 'Participant'}`;
-
-    const ratioWrapper = document.createElement('div');
-    ratioWrapper.className = 'ratio ratio-16x9';
-
-    const videoElement = document.createElement('video');
-    videoElement.className = 'w-100 h-100';
-    videoElement.autoplay = true;
-    videoElement.controls = true;
-    videoElement.srcObject = remoteStream;
-
-    ratioWrapper.appendChild(videoElement);
-    videoContainer.appendChild(videoTitle);
-    videoContainer.appendChild(ratioWrapper);
-    document.getElementById('remoteVideos').appendChild(videoContainer);
-
-    remoteVideoRefs.current[peerId] = videoElement;
-  }
-    });
-  
-    peer.on('close', () => {
-      delete peersRef.current[peerId];
-      setParticipants((prev) => prev.filter((p) => p.id !== peerId));
-      if (remoteVideoRefs.current[peerId]) {
-        remoteVideoRefs.current[peerId].srcObject = null;
-      }
-    });
-  
-    peer.on('error', (err) => {
-      console.error(`Error with peer ${peerId}:`, err);
-    });
-  
-    peersRef.current[peerId] = peer;
-  };
-  
-
-  // Function to share the screen
-  const shareScreen = async () => {
-    if (isSharing) {
-      // Stop sharing
-      if (screenStreamRef.current) {
-        screenStreamRef.current.getTracks().forEach((track) => track.stop());
-        // Remove tracks from peers
-        Object.values(peersRef.current).forEach((peer) => {
-          peer.removeStream(screenStreamRef.current);
-        });
-        screenStreamRef.current = null;
-      }
-      setIsSharing(false);
-  
-      // Stop displaying local video
-      if (localVideoRef.current) {
-        localVideoRef.current.srcObject = null;
-      }
-    } else {
-      // Start sharing
-      try {
-        const stream = await navigator.mediaDevices.getDisplayMedia({
-          video: true,
-          audio: true,
-        });
-        screenStreamRef.current = stream;
-        setIsSharing(true);
-  
-        // Display the local screen
-        if (localVideoRef.current) {
-          localVideoRef.current.srcObject = stream;
-          localVideoRef.current.play();
+      // Handle ICE candidates generated by the local peer
+      pc.current.onicecandidate = ({ candidate }) => {
+        console.log('📨 Generated local ICE candidate:', candidate);
+        if (candidate) {
+          socketRef.current.emit('candidate', { candidate });
+          console.log('📤 Sent local ICE candidate to server');
         }
-  
-        // Send the screen stream to all peers
-        Object.values(peersRef.current).forEach((peer) => {
-          stream.getTracks().forEach((track) => {
-            peer.addTrack(track, stream);
-          });
-        });
-      } catch (err) {
-        console.error('Error accessing display media:', err);
+      };
+
+      // Handle incoming media tracks from Janus
+      pc.current.ontrack = (event) => {
+        console.log('📡 Received remote track:', event);
+        const [remoteStream] = event.streams;
+        if (remoteVideoRef.current) {
+          remoteVideoRef.current.srcObject = remoteStream;
+          console.log('✅ Remote stream attached to video element');
+        }
+      };
+
+      // Handle connection state changes
+      pc.current.onconnectionstatechange = () => {
+        console.log('🔄 Connection state change:', pc.current.connectionState);
+        if (
+          pc.current.connectionState === 'failed' ||
+          pc.current.connectionState === 'disconnected' ||
+          pc.current.connectionState === 'closed'
+        ) {
+          console.warn('⚠️ Peer connection closed or failed');
+          setIsConnected(false);
+          setIsConnecting(false);
+          // Optionally handle reconnection or UI updates here
+        }
+      };
+
+      // Obtain user media
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      console.log('🎥 Obtained local media stream:', stream);
+
+      // Attach local stream to video element
+      if (localVideoRef.current) {
+        localVideoRef.current.srcObject = stream;
+        console.log('✅ Local stream attached to video element');
       }
+
+      // Add local tracks to RTCPeerConnection
+      stream.getTracks().forEach((track) => {
+        pc.current.addTrack(track, stream);
+        console.log(`🔗 Added local track: ${track.kind}`);
+      });
+
+      // Create SDP offer
+      const offer = await pc.current.createOffer();
+      await pc.current.setLocalDescription(offer);
+      console.log('📄 Created and set local SDP offer:', offer);
+
+      // Send SDP offer to server (and hence to Janus)
+      socketRef.current.emit('sendOfferToJanus', { jsep: offer });
+      console.log('📤 Sent SDP offer to Janus via server');
+    } catch (error) {
+      console.error('❌ Error during WebRTC connection setup:', error);
+      setError('Failed to set up WebRTC connection.');
+      setIsConnecting(false);
     }
   };
-  
+
+  // Cleanup function to close connections
+  useEffect(() => {
+    return () => {
+      console.log('🧹 Cleaning up connections');
+      if (pc.current) {
+        pc.current.close();
+      }
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
+  }, []);
 
   return (
     <div className="container-fluid vh-100 d-flex flex-column">
-    <div className="row flex-fill">
-      <div className="col-12 col-md-2 border-end p-3 overflow-auto">
-        <h3>Participants</h3>
-        <ul className="list-unstyled">
-          {participants.map((user) => (
-            <li key={user.id}>
-              {user.userName} {user.id === myId ? '(You)' : ''}
-            </li>
-          ))}
-        </ul>
-      </div>
-      <div className="col-12 col-md-8 d-flex flex-column p-3">
-        <h2>WebRTC Screen Sharing</h2>
-        <button onClick={shareScreen} className="btn btn-primary mb-3">
-          {isSharing ? 'Stop Sharing' : 'Share Screen'}
-        </button>
-        <div className="row flex-fill overflow-auto">
-          <div className="col-12 col-lg-6 mb-3">
-            <h4>Local Screen</h4>
-            <div className="ratio ratio-16x9">
-              <video ref={localVideoRef} className="w-100 h-100" muted />
+      <div className="row flex-fill">
+        <div className="col-12 p-3 overflow-auto">
+          <h2 className="mb-4">Janus Echo Test</h2>
+          <p>Your local video below is sent to Janus and echoed back:</p>
+          <div
+            className="d-flex justify-content-center align-items-center"
+            style={{ gap: '20px', marginBottom: '20px' }}
+          >
+            <div className="video-container">
+              <h5>Local Video</h5>
+              <video
+                ref={localVideoRef}
+                className="border"
+                style={{ width: '400px', height: '300px' }}
+                playsInline
+                autoPlay
+                muted
+              />
+            </div>
+            <div className="video-container">
+              <h5>Remote Video</h5>
+              <video
+                ref={remoteVideoRef}
+                className="border"
+                style={{ width: '400px', height: '300px' }}
+                playsInline
+                autoPlay
+              />
             </div>
           </div>
-          <div className="col-12 col-lg-6 mb-3">
-            <h4>Remote Screens</h4>
-            <div id="remoteVideos" className="d-flex flex-wrap"></div>
+          <div className="text-center">
+            <button
+              onClick={startEchoTest}
+              className="btn btn-primary btn-lg"
+              disabled={isConnecting || isConnected}
+            >
+              {isConnecting ? 'Connecting...' : isConnected ? 'Connected' : 'Start Echo Test'}
+            </button>
           </div>
+          {error && (
+            <div className="alert alert-danger mt-3" role="alert">
+              {error}
+            </div>
+          )}
         </div>
       </div>
-      <div className="col-12 col-md-2 border-start p-3 overflow-auto">
-        {/* Chat component goes here */}
-      </div>
     </div>
-  </div>
   );
 }
 
