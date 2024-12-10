@@ -45,80 +45,90 @@ let connection, session;
     // Handle client connections via Socket.io
     io.on('connection', (socket) => {
         console.log(`🔗 A user connected: ${socket.id}`);
-
-        // Initialize EchoHandle for this socket
-        socket.echoHandle = null;
-
-        // Handle disconnections
-        socket.on('disconnect', async () => {
-            console.log(`❌ User disconnected: ${socket.id}`);
-            if (socket.echoHandle) {
-                try {
-                    await socket.echoHandle.detach();
-                    console.log(`🧹 EchoHandle detached for socket: ${socket.id}`);
-                } catch (err) {
-                    console.error(`❌ Error detaching EchoHandle for socket ${socket.id}:`, err);
-                }
-            }
-        });
-
-        // Handle SDP Offer from client
-        socket.on('sendOfferToJanus', async (data) => {
-            const { jsep } = data;
-            console.log(`📩 Received 'sendOfferToJanus' from socket ${socket.id}:`, jsep);
-
+    
+        socket.on('joinRoom', async ({ roomId }) => {
             try {
-                // Attach EchoTest plugin handle for this socket
-                const echoHandle = await session.attach(EchoTestPlugin);
-                socket.echoHandle = echoHandle;
-                console.log(`✅ EchoTest plugin attached for socket: ${socket.id}`);
-
-                // Listen for ICE candidates from Janus and forward to client
-                echoHandle.on('trickle', (candidate) => {
-                    console.log(`🔄 Trickle ICE from Janus to socket ${socket.id}:`, candidate);
-                    socket.emit('candidate', { candidate });
-                });
-
-                // Start the EchoTest session with the client's SDP offer
-                const payload = {
-                    jsep: jsep,
-                    audio: true,
-                    video: true,
-                };
-                console.log(`🚀 Starting EchoTest for socket ${socket.id}`);
-                const startResponse = await echoHandle.start(payload);
-
-                // Send the SDP answer back to the client
-                socket.emit('janusAnswer', { jsep: startResponse.jsep });
-                console.log(`🟢 Sent Janus SDP answer to socket ${socket.id}`);
+                console.log(`🚪 User ${socket.id} joined room ${roomId}`);
+                socket.join(roomId);
+                socket.to(roomId).emit('userJoined', { userId: socket.id });
+    
+                // Log room details
+                const roomSockets = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
+                console.log(`📋 Users in room ${roomId}:`, roomSockets);
             } catch (err) {
-                console.error(`❌ Error handling 'sendOfferToJanus' for socket ${socket.id}:`, err);
-                socket.emit('error', { message: 'Failed to start EchoTest' });
+                console.error(`❌ Error handling 'joinRoom' for ${socket.id}:`, err);
             }
         });
-
-        // Handle ICE Candidates from client
-        socket.on('candidate', async (data) => {
-            const { candidate } = data;
-            console.log(`📨 Received ICE candidate from socket ${socket.id}:`, candidate);
-
-            if (socket.echoHandle) {
-                try {
-                    // Correctly structure the candidate object with top-level fields
-                    await socket.echoHandle.trickle({
+    
+        socket.on('offer', async ({ userId, jsep }) => {
+            try {
+                console.log(`📩 Received 'offer' from ${socket.id} for user ${userId}:`, jsep);
+    
+                // Attach EchoTest plugin handle for the user
+                if (!socket.echoHandle) {
+                    socket.echoHandle = await session.attach(EchoTestPlugin);
+                    console.log(`✅ EchoTest plugin attached for socket: ${socket.id}`);
+                }
+    
+                // Start the session with the received offer
+                const payload = { jsep, audio: true, video: true };
+                console.log(`🚀 Starting EchoTest for socket ${socket.id}`);
+                const startResponse = await socket.echoHandle.start(payload);
+    
+                // Send the SDP answer back to the client
+                socket.to(userId).emit('answer', { userId: socket.id, jsep: startResponse.jsep });
+                console.log(`🟢 Sent SDP answer to user ${userId}`);
+            } catch (err) {
+                console.error(`❌ Error handling 'offer' for socket ${socket.id}:`, err);
+            }
+        });
+    
+        socket.on('answer', ({ userId, jsep }) => {
+            try {
+                console.log(`📩 Received 'answer' from ${socket.id} for user ${userId}:`, jsep);
+                socket.to(userId).emit('answer', { userId: socket.id, jsep });
+            } catch (err) {
+                console.error(`❌ Error handling 'answer' for ${socket.id}:`, err);
+            }
+        });
+    
+        socket.on('candidate', ({ userId, candidate }) => {
+            try {
+                console.log(`📨 Received ICE candidate from ${socket.id} for user ${userId}:`, candidate);
+    
+                if (socket.echoHandle) {
+                    // Send candidate to Janus
+                    socket.echoHandle.trickle({
                         candidate: candidate.candidate,
                         sdpMid: candidate.sdpMid,
                         sdpMLineIndex: candidate.sdpMLineIndex,
                     });
                     console.log(`🔄 Sent ICE candidate to Janus for socket ${socket.id}`);
-                } catch (err) {
-                    console.error(`❌ Error sending ICE candidate to Janus for socket ${socket.id}:`, err);
                 }
-            } else {
-                console.warn(`⚠️ No EchoHandle found for socket ${socket.id} when receiving candidate`);
+    
+                // Forward candidate to the intended user
+                socket.to(userId).emit('candidate', { userId: socket.id, candidate });
+            } catch (err) {
+                console.error(`❌ Error handling 'candidate' for ${socket.id}:`, err);
+            }
+        });
+    
+        socket.on('disconnect', async () => {
+            try {
+                console.log(`❌ User disconnected: ${socket.id}`);
+                if (socket.echoHandle) {
+                    await socket.echoHandle.detach();
+                    console.log(`🧹 EchoHandle detached for socket: ${socket.id}`);
+                }
+                socket.broadcast.emit('userLeft', { userId: socket.id });
+            } catch (err) {
+                console.error(`❌ Error during 'disconnect' for ${socket.id}:`, err);
             }
         });
     });
+    
+    
+    
 
     // Start the server
     server.listen(PORT, () => {

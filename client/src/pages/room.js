@@ -1,175 +1,160 @@
-// room.js (Client)
 import React, { useEffect, useRef, useState } from 'react';
 import io from 'socket.io-client';
 
 function Room() {
   const localVideoRef = useRef(null);
-  const remoteVideoRef = useRef(null);
-  const pc = useRef(null);
-  const socketRef = useRef(null); // Reference to Socket.io client
-  const [isConnecting, setIsConnecting] = useState(false); // Indicates if connection is in progress
-  const [isConnected, setIsConnected] = useState(false); // Indicates if connection is established
-  const [error, setError] = useState(null); // Holds any connection errors
+  const remoteVideosRef = useRef({}); // Store multiple remote videos
+  const pc = useRef({}); // Store peer connections for each user
+  const socketRef = useRef(null);
+  const [isConnecting, setIsConnecting] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  const [error, setError] = useState(null);
+  const [roomId, setRoomId] = useState("room-1234"); // Default room
 
-  // Function to initiate the Echo Test
-  const startEchoTest = async () => {
+  const startRoom = async () => {
     if (isConnecting || isConnected) {
-      console.warn('🔔 Echo Test is already in progress or connected.');
-      return;
+        console.warn('🔔 Already in a room.');
+        return;
     }
 
     setIsConnecting(true);
-    setError(null); // Reset any previous errors
+    setError(null);
 
     try {
-      // Initialize Socket.io client
-      socketRef.current = io("http://localhost:8080"); // Update with your server URL if different
+        socketRef.current = io("http://localhost:8080");
 
-      // Handle successful socket connection
-      socketRef.current.on('connect', async () => {
-        console.log('🔗 Socket connected:', socketRef.current.id);
-        await initiateWebRTCConnection();
-      });
+        socketRef.current.on('connect', () => {
+            console.log('🔗 Socket connected:', socketRef.current.id);
+            joinRoom();
+        });
 
-      // Handle incoming ICE candidates from Janus
-      socketRef.current.on('candidate', async ({ candidate }) => {
-        if (candidate) {
-          console.log('📩 Received ICE candidate from Janus:', candidate);
-          try {
-            await pc.current.addIceCandidate(new RTCIceCandidate(candidate));
-            console.log('✅ Added ICE candidate from Janus successfully');
-          } catch (error) {
-            console.error('❌ Error adding received ICE candidate:', error);
-          }
-        }
-      });
+        socketRef.current.on('userJoined', async ({ userId }) => {
+            console.log(`🟢 User joined: ${userId}`);
+            await createPeerConnection(userId);
+        });
 
-      // Handle SDP Answer from Janus
-      socketRef.current.on('janusAnswer', async ({ jsep }) => {
-        console.log('📩 Received Janus SDP answer:', jsep);
-        try {
-          await pc.current.setRemoteDescription(new RTCSessionDescription(jsep));
-          console.log('✅ Remote description set successfully');
-          setIsConnected(true);
-          setIsConnecting(false);
-        } catch (error) {
-          console.error('❌ Error setting remote description:', error);
-          setError('Failed to set remote description.');
-          setIsConnecting(false);
-        }
-      });
+        socketRef.current.on('offer', async ({ userId, jsep }) => {
+            console.log(`📩 Received offer from ${userId}:`, jsep);
+            await handleOffer(userId, jsep);
+        });
 
-      // Handle socket errors
-      socketRef.current.on('error', (error) => {
-        console.error('🔴 Socket encountered an error:', error);
-        setError('Socket encountered an error.');
-        setIsConnecting(false);
-      });
+        socketRef.current.on('answer', async ({ userId, jsep }) => {
+            console.log(`📩 Received answer from ${userId}:`, jsep);
+            await pc.current[userId].setRemoteDescription(new RTCSessionDescription(jsep));
+        });
 
-      // Handle socket disconnection
-      socketRef.current.on('disconnect', (reason) => {
-        console.log('❌ Socket disconnected:', reason);
-        setIsConnected(false);
-        setIsConnecting(false);
-        // Optionally reset peer connection or UI elements here
-      });
+        socketRef.current.on('candidate', ({ userId, candidate }) => {
+            console.log(`📨 Received ICE candidate from ${userId}:`, candidate);
+            if (pc.current[userId]) {
+                pc.current[userId].addIceCandidate(new RTCIceCandidate(candidate));
+            }
+        });
+
+        socketRef.current.on('userLeft', ({ userId }) => {
+            console.log(`❌ User left: ${userId}`);
+            if (pc.current[userId]) {
+                pc.current[userId].close();
+                delete pc.current[userId];
+            }
+            delete remoteVideosRef.current[userId];
+            setIsConnected(Object.keys(pc.current).length > 0);
+        });
+
+        socketRef.current.on('error', (err) => {
+            console.error('🔴 Socket error:', err);
+            setError('Socket error.');
+            setIsConnecting(false);
+        });
     } catch (err) {
-      console.error('❌ Error initiating Echo Test:', err);
-      setError('Failed to initiate Echo Test.');
-      setIsConnecting(false);
+        console.error('❌ Error starting room:', err);
+        setError('Failed to start room.');
+        setIsConnecting(false);
     }
-  };
+};
 
-  // Function to initiate WebRTC connection
-  const initiateWebRTCConnection = async () => {
+
+  const joinRoom = async () => {
     try {
-      // Initialize RTCPeerConnection
-      pc.current = new RTCPeerConnection({
-        iceServers: [
-          {
-            urls: 'stun:stun.l.google.com:19302', // Google STUN server
-          },
-          {
-            urls: 'turn:20.93.35.100:3478', // Your TURN server
-            username: 'testuser',           // TURN username
-            credential: 'testpassword',     // TURN password
-          },
-        ],
-        iceTransportPolicy: 'all', // Allows both STUN and TURN servers
-      });
-
-      // Handle ICE candidates generated by the local peer
-      pc.current.onicecandidate = ({ candidate }) => {
-        console.log('📨 Generated local ICE candidate:', candidate);
-        if (candidate) {
-          socketRef.current.emit('candidate', { candidate });
-          console.log('📤 Sent local ICE candidate to server');
-        }
-      };
-
-      // Handle incoming media tracks from Janus
-      pc.current.ontrack = (event) => {
-        console.log('📡 Received remote track:', event);
-        const [remoteStream] = event.streams;
-        if (remoteVideoRef.current) {
-          remoteVideoRef.current.srcObject = remoteStream;
-          console.log('✅ Remote stream attached to video element');
-        }
-      };
-
-      // Handle connection state changes
-      pc.current.onconnectionstatechange = () => {
-        console.log('🔄 Connection state change:', pc.current.connectionState);
-        if (
-          pc.current.connectionState === 'failed' ||
-          pc.current.connectionState === 'disconnected' ||
-          pc.current.connectionState === 'closed'
-        ) {
-          console.warn('⚠️ Peer connection closed or failed');
-          setIsConnected(false);
-          setIsConnecting(false);
-          // Optionally handle reconnection or UI updates here
-        }
-      };
-
-      // Obtain user media
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-      console.log('🎥 Obtained local media stream:', stream);
-
-      // Attach local stream to video element
+      const stream = await getLocalStream();
       if (localVideoRef.current) {
         localVideoRef.current.srcObject = stream;
-        console.log('✅ Local stream attached to video element');
       }
-
-      // Add local tracks to RTCPeerConnection
-      stream.getTracks().forEach((track) => {
-        pc.current.addTrack(track, stream);
-        console.log(`🔗 Added local track: ${track.kind}`);
-      });
-
-      // Create SDP offer
-      const offer = await pc.current.createOffer();
-      await pc.current.setLocalDescription(offer);
-      console.log('📄 Created and set local SDP offer:', offer);
-
-      // Send SDP offer to server (and hence to Janus)
-      socketRef.current.emit('sendOfferToJanus', { jsep: offer });
-      console.log('📤 Sent SDP offer to Janus via server');
-    } catch (error) {
-      console.error('❌ Error during WebRTC connection setup:', error);
-      setError('Failed to set up WebRTC connection.');
+      socketRef.current.emit('joinRoom', { roomId });
+      console.log('🚪 Joined room:', roomId);
+      setIsConnected(true);
+      setIsConnecting(false);
+    } catch (err) {
+      console.error('❌ Error joining room:', err);
+      setError('Failed to join room.');
       setIsConnecting(false);
     }
   };
 
-  // Cleanup function to close connections
+  const getLocalStream = async () => {
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    } catch (err) {
+      console.warn('⚠️ Camera not found. Falling back to audio-only.', err);
+      return new MediaStream(); // Return empty stream
+    }
+  };
+
+  const createPeerConnection = async (userId) => {
+    pc.current[userId] = new RTCPeerConnection({
+      iceServers: [
+        {
+          urls: 'turn:20.93.35.100:3478',
+          username: 'testuser',
+          credential: 'testpassword',
+        },
+      ],
+    });
+
+    const stream = localVideoRef.current.srcObject || new MediaStream();
+    stream.getTracks().forEach((track) => {
+      pc.current[userId].addTrack(track, stream);
+    });
+
+    pc.current[userId].onicecandidate = ({ candidate }) => {
+      if (candidate) {
+        socketRef.current.emit('candidate', { userId, candidate });
+      }
+    };
+
+    pc.current[userId].ontrack = (event) => {
+      const [remoteStream] = event.streams;
+      if (!remoteVideosRef.current[userId]) {
+        const video = document.createElement('video');
+        video.srcObject = remoteStream;
+        video.autoplay = true;
+        video.playsInline = true;
+        video.style.width = '400px';
+        video.style.height = '300px';
+        video.controls = true;
+        document.body.appendChild(video);
+        remoteVideosRef.current[userId] = video;
+      }
+    };
+
+    const offer = await pc.current[userId].createOffer();
+    await pc.current[userId].setLocalDescription(offer);
+    socketRef.current.emit('offer', { userId, jsep: offer });
+  };
+
+  const handleOffer = async (userId, jsep) => {
+    if (!pc.current[userId]) {
+      await createPeerConnection(userId);
+    }
+    await pc.current[userId].setRemoteDescription(new RTCSessionDescription(jsep));
+    const answer = await pc.current[userId].createAnswer();
+    await pc.current[userId].setLocalDescription(answer);
+    socketRef.current.emit('answer', { userId, jsep: answer });
+  };
+
   useEffect(() => {
     return () => {
-      console.log('🧹 Cleaning up connections');
-      if (pc.current) {
-        pc.current.close();
-      }
+      console.log('🧹 Cleaning up');
+      Object.values(pc.current).forEach((connection) => connection.close());
       if (socketRef.current) {
         socketRef.current.disconnect();
       }
@@ -180,14 +165,13 @@ function Room() {
     <div className="container-fluid vh-100 d-flex flex-column">
       <div className="row flex-fill">
         <div className="col-12 p-3 overflow-auto">
-          <h2 className="mb-4">Janus Echo Test</h2>
-          <p>Your local video below is sent to Janus and echoed back:</p>
+          <h2 className="mb-4">Video Chat Room</h2>
           <div
             className="d-flex justify-content-center align-items-center"
             style={{ gap: '20px', marginBottom: '20px' }}
           >
-            <div className="video-container">
-              <h5>Local Video</h5>
+            <div>
+              <h5>Your Video</h5>
               <video
                 ref={localVideoRef}
                 className="border"
@@ -197,24 +181,14 @@ function Room() {
                 muted
               />
             </div>
-            <div className="video-container">
-              <h5>Remote Video</h5>
-              <video
-                ref={remoteVideoRef}
-                className="border"
-                style={{ width: '400px', height: '300px' }}
-                playsInline
-                autoPlay
-              />
-            </div>
           </div>
           <div className="text-center">
             <button
-              onClick={startEchoTest}
+              onClick={startRoom}
               className="btn btn-primary btn-lg"
               disabled={isConnecting || isConnected}
             >
-              {isConnecting ? 'Connecting...' : isConnected ? 'Connected' : 'Start Echo Test'}
+              {isConnecting ? 'Connecting...' : isConnected ? 'Connected' : 'Join Room'}
             </button>
           </div>
           {error && (
