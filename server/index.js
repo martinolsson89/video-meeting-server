@@ -1,108 +1,150 @@
-const express = require('express');
-const cors = require('cors');
-const { Server } = require('socket.io');
-const http = require('http');
+// index.js (Server)
+import express from 'express';
+import cors from 'cors';
+import { Server } from 'socket.io';
+import http from 'http';
+import Janode from 'janode';
+import VideoRoomPlugin from 'janode/plugins/videoroom';
 
 const app = express();
 app.use(cors());
 
-const port = process.env.PORT || 8080;
+const PORT = process.env.PORT || 8080;
 const server = http.createServer(app);
 
 const io = new Server(server, {
     cors: {
-        origin: '*',
+        origin: '*', // Adjust this in production for security
         methods: ['GET', 'POST'],
     },
 });
 
-app.get('/', (req, res) => {
-    res.send(`WebRTC Signaling Server is running on port ${port}`);
-});
+// Initialize Janus connection
+let connection, session;
 
-io.on('connection', (socket) => {
-    console.log('A user connected:', socket.id);
+(async () => {
+    try {
+        connection = await Janode.connect({
+            is_admin: false,
+            address: { url: 'ws://20.93.35.100:8091/janus' },
+        });
+        console.log('✅ Successfully connected to Janus server');
 
-    // Handle user disconnect
-    socket.on('disconnect', () => {
-        console.log('User disconnected:', socket.id);
+        session = await connection.create();
+        console.log(`🟢 Session created with ID: ${session.id}`);
+    } catch (error) {
+        console.error('❌ Error initializing Janus connection:', error);
+        process.exit(1); // Exit if Janus is unreachable
+    }
 
-        // Notify others in the room that the user has left
-        if (socket.roomId) {
-            socket.to(socket.roomId).emit('user-disconnected', {
-                id: socket.id,
-                userName: socket.userName,
-            });
-        }
+    // Basic endpoint to confirm server is running
+    app.get('/', (req, res) => {
+        res.send(`WebRTC Signaling Server is running on port ${PORT}`);
     });
 
-    // Listen for 'join-room' event to handle room joining
-    socket.on('join-room', ({ roomId, userName }) => {
-        console.log(`User ${userName} is joining room ${roomId}`);
-
-        // Store the user's name and room ID in the socket object
-        socket.userName = userName;
-        socket.roomId = roomId;
-
-        // Join the specified room
-        socket.join(roomId);
-
-        // Notify existing users in the room about the new user
-        socket.to(roomId).emit('user-connected', {
-            id: socket.id,
-            userName: userName,
-        });
-
-        // Send the list of existing peers in the room to the new user
-        const connectedPeers = [];
-        const clients = io.sockets.adapter.rooms.get(roomId);
-
-        if (clients) {
-            clients.forEach((clientId) => {
-                if (clientId !== socket.id) { // Exclude the current socket
-                    const clientSocket = io.sockets.sockets.get(clientId);
-                    if (clientSocket) {
-                        connectedPeers.push({
-                            id: clientSocket.id,
-                            userName: clientSocket.userName,
-                        });
-                    }
+    // Handle client connections via Socket.io
+    io.on('connection', (socket) => {
+        console.log(`🔗 A user connected: ${socket.id}`);
+    
+        socket.on('joinRoom', async ({ roomId, displayName }) => {
+            try {
+                console.log(`🚪 User ${socket.id} is joining room ${roomId}`);
+        
+                if (!socket.videoHandle) {
+                    socket.videoHandle = await session.attach(VideoRoomPlugin);
+                    console.log(`✅ VideoRoom plugin attached for socket: ${socket.id}`);
                 }
-            });
-        }
+        
+                const numericRoomId = parseInt(roomId, 10);
+                if (isNaN(numericRoomId) || numericRoomId <= 0) {
+                    throw new Error('Room ID must be a positive integer');
+                }
 
-        socket.emit('existing-peers', { peers: connectedPeers });
+                const roomInfo = await socket.videoHandle.list();
+                const roomExists = roomInfo.list.some((room) => room.room === numericRoomId);
+        
+                if (!roomExists) {
+                    console.log(`🔨 Creating room ${roomId} (numeric ID: ${numericRoomId})`);
+                    await socket.videoHandle.create({ room: numericRoomId, publishers: 10 });
+                    console.log(`✅ Room ${roomId} created`);
+                }
+        
+                const joinResponse = await socket.videoHandle.joinPublisher({
+                    room: numericRoomId,
+                    display: displayName || `User-${socket.id}`,
+                });
+        
+                console.log(`📥 User ${socket.id} joined room ${roomId} (numeric ID: ${numericRoomId})`);
+                socket.emit('joinedRoom', { roomId: numericRoomId, jsep: joinResponse.jsep });
 
+                // Logically join the room via Socket.io
+                socket.join(roomId);
+        
+                // Fetch participants
+                const participantsData = await socket.videoHandle.listParticipants({ room: numericRoomId });
+                const participantNames = participantsData.participants.map((p) => p.display);
+                console.log(`👥 Participants in room ${roomId}:`, participantNames);
 
-        // Handle SDP exchange (offer/answer)
-        socket.on('exchangeSDP', (data) => {
-            console.log('SDP exchange from', socket.id, 'to', data.target);
-            io.to(data.target).emit('exchangeSDP', {
-                sdp: data.sdp,
-                sender: socket.id,
-            });
+                // Emit updated participant list to all in the room
+                io.in(roomId).emit('participantsUpdate', participantNames);
+            } catch (err) {
+                console.error(`❌ Error handling 'joinRoom' for ${socket.id}:`, err);
+                socket.emit('error', { message: 'Failed to join room', details: err.message });
+            }
         });
-
-        // Handle ICE candidates
-        socket.on('candidate', (data) => {
-            console.log('ICE candidate from', socket.id, 'to', data.target);
-            io.to(data.target).emit('candidate', {
-                candidate: data.candidate,
-                sender: socket.id,
-            });
+    
+        socket.on('offer', async ({ jsep, roomId }) => {
+            try {
+                console.log(`📩 Received 'offer' from ${socket.id} for room ${roomId}`);
+    
+                if (socket.videoHandle) {
+                    const configureResponse = await socket.videoHandle.configure({
+                        jsep,
+                        audio: true,
+                        video: true,
+                    });
+    
+                    console.log(`🚀 Configured plugin for socket ${socket.id}`);
+                    socket.emit('answer', { jsep: configureResponse.jsep });
+                }
+            } catch (err) {
+                console.error(`❌ Error handling 'offer' for socket ${socket.id}:`, err);
+                socket.emit('error', { message: 'Failed to handle offer', details: err.message });
+            }
         });
-
-        // Handle chat message
-        socket.on('chat-message', (message) => {
-            // Broadcast the message to other users in the room
-            socket.to(roomId).emit('chat-message', {
-                message: message,
-                userName: userName,
-            });
+    
+        socket.on('candidate', ({ candidate }) => {
+            try {
+                console.log(`📨 Received ICE candidate from ${socket.id}:`, candidate);
+    
+                if (socket.videoHandle) {
+                    socket.videoHandle.trickle({
+                        candidate: candidate.candidate,
+                        sdpMid: candidate.sdpMid,
+                        sdpMLineIndex: candidate.sdpMLineIndex,
+                    });
+                    console.log(`🔄 Sent ICE candidate to Janus for socket ${socket.id}`);
+                }
+            } catch (err) {
+                console.error(`❌ Error handling 'candidate' for ${socket.id}:`, err);
+            }
+        });
+    
+        socket.on('disconnect', async () => {
+            try {
+                console.log(`❌ User disconnected: ${socket.id}`);
+                if (socket.videoHandle) {
+                    await socket.videoHandle.detach();
+                    console.log(`🧹 VideoHandle detached for socket: ${socket.id}`);
+                }
+            } catch (err) {
+                console.error(`❌ Error during 'disconnect' for ${socket.id}:`, err);
+            }
         });
     });
-});
 
-server.listen(port, () => {
-    console.log(`Signaling server running on http://localhost:${port}`);
-});
+    // Start the server
+    server.listen(PORT, () => {
+        console.log(`🚀 Signaling server running on http://localhost:${PORT}`);
+    });
+})();
